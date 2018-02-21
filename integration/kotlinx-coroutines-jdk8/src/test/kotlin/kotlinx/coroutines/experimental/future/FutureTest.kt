@@ -17,15 +17,13 @@
 package kotlinx.coroutines.experimental.future
 
 import kotlinx.coroutines.experimental.*
-import org.hamcrest.core.IsEqual
+import kotlinx.coroutines.experimental.CancellationException
+import org.hamcrest.core.*
+import org.junit.*
 import org.junit.Assert.*
-import org.junit.Before
-import org.junit.Test
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.coroutines.experimental.CoroutineContext
+import java.util.concurrent.*
+import java.util.concurrent.atomic.*
+import kotlin.coroutines.experimental.*
 
 class FutureTest : TestBase() {
     @Before
