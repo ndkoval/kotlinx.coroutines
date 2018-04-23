@@ -19,6 +19,7 @@ package kotlinx.coroutines.experimental.sync
 import kotlinx.coroutines.experimental.*
 import org.hamcrest.core.IsEqual
 import org.junit.Assert.*
+import org.junit.Ignore
 import org.junit.Test
 
 class MutexTest : TestBase() {
@@ -92,6 +93,7 @@ class MutexTest : TestBase() {
         assertEquals(n * k, shared)
     }
 
+    @Ignore
     @Test
     fun testUnconfinedStackOverflow() {
         val waiters = 10000

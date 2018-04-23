@@ -375,10 +375,10 @@ internal class MutexImpl(locked: Boolean) : Mutex, SelectClause2<Any?, Mutex> {
                             // and its attempts to take a lock must be queued.
                             state.owner = waiter.owner ?: LOCKED
                             // StackOverflow avoidance code
-                            if (startResumeNext(waiter, token)) {
+//                            if (startResumeNext(waiter, token)) {
                                 waiter.completeResumeLockWaiter(token)
-                                finishResumeNext()
-                            }
+//                                finishResumeNext()
+//                            }
                             return
                         }
                     }

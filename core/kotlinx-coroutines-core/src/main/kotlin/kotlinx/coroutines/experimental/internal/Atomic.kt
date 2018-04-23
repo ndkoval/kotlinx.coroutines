@@ -24,7 +24,7 @@ import kotlinx.atomicfu.atomic
  *
  * @suppress **This is unstable API and it is subject to change.**
  */
-public abstract class OpDescriptor {
+public abstract class OpDescriptor { // TODO interface instead of abstract class?
     /**
      * Returns `null` is operation was performed successfully or some other
      * object that indicates the failure reason.

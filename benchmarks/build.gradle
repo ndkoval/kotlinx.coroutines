@@ -17,7 +17,11 @@ jmh.jmhVersion = '1.19'
 
 jmhJar.archiveName = 'benchmarks.jar'
 
-//jmh {
-//    include = ['.*Channel.*Benchmark']
+jmh {
+    forceGC = true
+    failOnError = true
+//    jvmArgs = ['-XX:+UseRTMLocking']
+    include = ['.*MutexBenchmark.*']
+//    include = ['.*SemaphoreBenchmark.*', '.*Mutex.*Benchmark.*']
 //    exclude = ['.*Guice.*', '.*PingPong.*']
-//}
+}

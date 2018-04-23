@@ -46,6 +46,7 @@ GuideSyncBenchmark.sync04ConfineFine    avgt   15  1331453.593 ±  89298.871  us
 GuideSyncBenchmark.sync05ConfineCoarse  avgt   15     2253.270 ±    425.033  us/op
 GuideSyncBenchmark.sync06Mutex          avgt   15  1075086.511 ± 140589.883  us/op
 GuideSyncBenchmark.sync07Actor          avgt   15  1075603.512 ± 203901.350  us/op
+GuideSyncBenchmark.sync06Mutex          avgt   15  ??? ± ???  us/op
 
  */
 
@@ -103,5 +104,10 @@ open class GuideSyncBenchmark {
     @Benchmark
     fun sync07Actor() {
         guide.sync.example07.main(emptyArray())
+    }
+
+    @Benchmark
+    fun sync08SemaphoreAsMutex() {
+        guide.sync.example08.main(emptyArray())
     }
 }

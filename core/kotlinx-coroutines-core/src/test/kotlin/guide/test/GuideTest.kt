@@ -436,6 +436,14 @@ class GuideTest {
     }
 
     @Test
+    fun testGuideSyncExample08() {
+        test("GuideSyncExample08") { guide.sync.example08.main(emptyArray()) }.verifyLinesArbitraryTime(
+                "Completed 1000000 actions in xxx ms",
+                "Counter = 1000000"
+        )
+    }
+
+    @Test
     fun testGuideSelectExample01() {
         test("GuideSelectExample01") { guide.select.example01.main(emptyArray()) }.verifyLines(
             "fizz -> 'Fizz'",
