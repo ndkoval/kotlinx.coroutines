@@ -4,6 +4,7 @@ import org.openjdk.jmh.annotations.*
 import org.openjdk.jmh.infra.Blackhole
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 @Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)
 @Measurement(iterations = 5, time = 1, timeUnit = TimeUnit.SECONDS)
@@ -12,7 +13,13 @@ import java.util.concurrent.TimeUnit
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 @State(Scope.Benchmark)
 open class MutexSynchronizationOnlyBenchmark {
-    @Param("1", "2", "4", "10", "20", "50", "100")
+    private val TOTAL_OPERATIONS = 1_000_000
+
+    @Param("1", "2", "4", "8", "18", "36", "48", "72", "98", "144")
+//    @Param("1", "4")
+    private var threads: Int = 0
+
+    @Param("1", "2", "4", "10", "20")
     private var contentionDecreaseFactor: Int = 0
 
     @Param
@@ -25,51 +32,23 @@ open class MutexSynchronizationOnlyBenchmark {
         mutexes = Array(contentionDecreaseFactor, { mutexViewCreator.create() })
     }
 
-    @Benchmark @Threads(1)
-    fun bench_t1() = bench()
-
-    @Benchmark @Threads(2)
-    fun bench_t2() = bench()
-
-    @Benchmark @Threads(4)
-    fun bench_t4() = bench()
-
-    @Benchmark @Threads(8)
-    fun bench_t10() = bench()
-
-    @Benchmark @Threads(18)
-    fun bench_t18() = bench()
-
-    @Benchmark @Threads(36)
-    fun bench_t36() = bench()
-
-    @Benchmark @Threads(48)
-    fun bench_t48() = bench()
-
-    @Benchmark @Threads(72)
-    fun bench_t72() = bench()
-
-    @Benchmark @Threads(98)
-    fun bench_t98() = bench()
-
-    @Benchmark @Threads(144)
-    fun bench_t144() = bench()
-
-    @Benchmark @Threads(160)
-    fun bench_t160() = bench()
-
-    @Benchmark @Threads(200)
-    fun bench_t200() = bench()
-
-    private fun bench() {
-        val id = ThreadLocalRandom.current().nextInt(contentionDecreaseFactor)
-        val mutex = mutexes[id]
-        mutex.lock()
-        try {
-            Blackhole.consumeCPU(3)
-        } finally {
-            mutex.unlock()
+    @Benchmark
+    fun massiveRun() {
+        val jobs = List(threads) {
+            thread {
+                repeat(TOTAL_OPERATIONS / threads) {
+                    val id = ThreadLocalRandom.current().nextInt(contentionDecreaseFactor)
+                    val mutex = mutexes[id]
+                    mutex.lock()
+                    try {
+                        Blackhole.consumeCPU(5)
+                    } finally {
+                        mutex.unlock()
+                    }
+                }
+            }
         }
+        jobs.forEach { it.join() }
     }
 }
 

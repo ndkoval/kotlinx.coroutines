@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 open class MutexBenchmark {
-    private val TOTAL_OPERATIONS = 500_000
+    private val TOTAL_OPERATIONS = 1_000_000
 
     @Param("1", "2", "4", "8", "18", "36", "48", "72", "98", "144", "160", "200")
 //    @Param("1", "4")

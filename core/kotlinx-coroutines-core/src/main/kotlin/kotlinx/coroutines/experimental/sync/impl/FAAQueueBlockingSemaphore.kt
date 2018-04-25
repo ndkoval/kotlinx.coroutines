@@ -7,13 +7,16 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import java.util.concurrent.atomic.AtomicReferenceArray
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
-
-class FAAQueueBlockingSemaphore(maxPermits: Int, val segmentSize: Int = 16) : AbstractQueueWithSpinSemaphore(maxPermits) {
+/**
+ * This is an almost lock-free queue based on MSQueue and "as fast as fetch-and-add" (PPoPP'16) queue.
+ * Every node has array of items, enqueue index and deque index.
+ */
+class FAAQueueBlockingSemaphore(maxPermits: Int, private val segmentSize: Int = 16) : AbstractQueueWithSpinSemaphore(maxPermits) {
     private class Node(segmentSize: Int, item: Any?) {
         @Contended @Volatile @JvmField
-        var deqidx = 0
+        var dequeIndex = 0
         @Contended @Volatile @JvmField
-        var enqidx = 1
+        var enqueIndex = 1
         @Volatile @JvmField
         var next: Node? = null
 
@@ -31,7 +34,7 @@ class FAAQueueBlockingSemaphore(maxPermits: Int, val segmentSize: Int = 16) : Ab
 
     init {
         val sentinelNode = Node(segmentSize,null)
-        sentinelNode.enqidx = 0
+        sentinelNode.enqueIndex = 0
         head = sentinelNode
         tail = sentinelNode
     }
@@ -61,20 +64,20 @@ class FAAQueueBlockingSemaphore(maxPermits: Int, val segmentSize: Int = 16) : Ab
     override fun pollBlocking(): Any {
         while (true) {
             val lhead = head
-            if (lhead.deqidx >= lhead.enqidx && lhead.next == null) continue
+            if (lhead.dequeIndex >= lhead.enqueIndex && lhead.next == null) continue
             val idx = deqidxUpdater.getAndIncrement(lhead)
-            if (idx > segmentSize - 1) { // This node has been drained, check if there is another one
+            if (idx >= segmentSize) { // This node has been drained, check if there is another one
                 if (lhead.next == null) continue
                 headUpdater.compareAndSet(this, lhead, lhead.next)
                 continue
             }
-            val item = lhead.items.getAndSet(idx, TAKEN)
+            val item = lhead.items.getAndSet(idx, TAKEN_ITEM)
             if (item != null) return item
         }
     }
 
     private companion object {
-        private val TAKEN = Symbol("TAKEN")
+        private val TAKEN_ITEM = Symbol("TAKEN_ITEM")
 
         @JvmField
         val tailUpdater = AtomicReferenceFieldUpdater.newUpdater(FAAQueueBlockingSemaphore::class.java, Node::class.java, "tail")
@@ -84,9 +87,9 @@ class FAAQueueBlockingSemaphore(maxPermits: Int, val segmentSize: Int = 16) : Ab
         val nextUpdater = AtomicReferenceFieldUpdater.newUpdater(Node::class.java, Node::class.java, "next")
 
         @JvmField
-        val deqidxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "deqidx")
+        val deqidxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "dequeIndex")
         @JvmField
-        val enqidxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "enqidx")
+        val enqidxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "enqueIndex")
     }
 }
 
