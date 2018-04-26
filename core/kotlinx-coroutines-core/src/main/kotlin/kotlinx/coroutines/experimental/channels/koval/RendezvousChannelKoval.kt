@@ -6,49 +6,70 @@ import kotlinx.coroutines.experimental.internal.Symbol
 import kotlinx.coroutines.experimental.selects.SelectClause1
 import kotlinx.coroutines.experimental.selects.SelectClause2
 import sun.misc.Contended
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import java.util.concurrent.atomic.AtomicReferenceArray
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
 
 fun main(args: Array<String>) = runBlocking {
-    val ch = RendezvousChannelKoval<Int>()
-    val jobs = List(100000) {id ->
+    val TOTAL_WORK = 100_000_000
+    val COROUTINES = 10000
+
+    check(TOTAL_WORK % COROUTINES == 0)
+    check(COROUTINES % 2 == 0)
+
+    val LOCAL_WORK = TOTAL_WORK / COROUTINES
+
+    val chK = RendezvousChannelKoval<Int>()
+    val startKoval = System.currentTimeMillis()
+    List(COROUTINES) {id ->
         launch {
             if (id % 2 == 0) {
-                println("$id: sending")
-                ch.send(id)
-                println("$id: sent")
+                repeat(LOCAL_WORK) { chK.send(id) }
             } else {
-                delay(1000)
-                println("$id: receiving")
-                val x = ch.receive()
-                println("$id: received $x")
+                repeat(LOCAL_WORK) { chK.receive() }
             }
         }
-    }
-    jobs.forEach { it.join() }
+    }.forEach{ it.join() }
+    val endKoval = System.currentTimeMillis()
+
+
+    val chE = RendezvousChannel<Int>()
+    val startElizarov = System.currentTimeMillis()
+    List(COROUTINES) {id ->
+        launch {
+            if (id % 2 == 0) {
+                repeat(LOCAL_WORK) { chE.send(id) }
+            } else {
+                repeat(LOCAL_WORK) { chE.receive() }
+            }
+        }
+    }.forEach{ it.join() }
+    val endElizarov = System.currentTimeMillis()
+
+    println("Koval=${endKoval - startKoval}, Elizarov=${endElizarov - startElizarov}")
 }
 
 
 class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval<E> {
-    private class Node<E>(segmentSize: Int) {
+    private class Node(segmentSize: Int) {
         @Volatile @JvmField var _deqIdx = 0
         @Volatile @JvmField var _enqIdx = 0
 
-        @Volatile @JvmField var _next: Node<E>? = null
+        @Volatile @JvmField var _next: Node? = null
 
         @JvmField val _data = AtomicReferenceArray<Any?>(segmentSize * 2)
     }
 
     @Contended @Volatile
-    private var _head: Node<E>
+    private var _head: Node
 
     @Contended @Volatile
-    private var _tail: Node<E>
+    private var _tail: Node
 
     init {
-        val sentinelNode = Node<E>(segmentSize)
+        val sentinelNode = Node(segmentSize)
         _head = sentinelNode
         _tail = sentinelNode
     }
@@ -58,90 +79,97 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
         sendSuspend(element)
     }
 
-    private suspend fun sendSuspend(element: E) = suspendAtomicCancellableCoroutine<Unit>(holdCancellability = true) sc@ { curCont ->
-        while (true) { // CAS-loop
+    private suspend fun <T> sendOrReceiveSuspend(element: Any) = suspendAtomicCancellableCoroutine<T>(holdCancellability = true) sc@ { curCont ->
+        while (true) { // CAS loop
+            // Read tail and its enqueue index at first, then head and its indexes
+            val tail = _tail
+            val tailEnqIdx = tail._enqIdx
             val head = _head
             val headDeqIdx = head._deqIdx
             val headEnqIdx = head._enqIdx
-
-            val tail = _tail
-            val tailDeqIdx = tail._deqIdx
-            val tailEnqIdx = tail._enqIdx
-
+            // If the waiting queue is empty, 'headDeqIdx == headEnqIdx'.
+            // But they also could be equal if the 'head' node is full.
             if (headDeqIdx == headEnqIdx) {
-                // Queue is empty or _head should be moved forward (CAS to _next)
+                // Check if the node is full
                 if (headDeqIdx == segmentSize) {
-                    // Segment is full, move _next forward
+                    // 'head' node is full, try to move '_head' pointer forward and create a new node if needed
                     val headNext = head._next
                     if (headNext != null) {
+                        // Move '_head' forward. If CAS fails, another thread moved it.
                         headUpdater.compareAndSet(this, head, headNext)
                     } else {
-                        // Queue is empty, add a new segment
-                        check(head == tail, { "Queue is empty, head and tail should point to the same node" })
-                        // Create new segment and add it as 'tail._next'
-                        val node = Node<E>(segmentSize)
-                        if (nextUpdater.compareAndSet(tail, null, node)) {
-                            // New segment is added successfully, help to move tail
-                            tailUpdater.compareAndSet(this, tail, node)
+                        // Create new node. If CAS fails, another thread added a new one
+                        val node = Node(segmentSize)
+                        if (nextUpdater.compareAndSet(head, null, node)) {
+                            // New node added, try to move tail. If this CAS fail, another thread moved it.
+                            tailUpdater.compareAndSet(this, head, node)
                         }
                     }
                 } else {
-                    check(head == tail, { "Queue has one segment only" })
-                    // Try to add sender to the waiting queue at index 'headEnqIdx'
+                    // Queue is empty, try to add the current continuation
                     if (enqIdxUpdater.compareAndSet(head, headEnqIdx, headEnqIdx + 1)) {
-                        head._data[headEnqIdx * 2 + 1] = curCont
-                        head._data[headEnqIdx * 2] = element
-                        curCont.initCancellability()
+                        // Slot with 'headEnqIdx' index claimed, store the current continuation
+                        storeContinuation(head, headEnqIdx, curCont, element)
                         return@sc
                     }
                 }
             } else {
-                // Queue is not empty. Remove receiver from the head
-                // or add the sender to the tail.
-                var headValue = head._data[headDeqIdx * 2]
-                // Spin wait until value is set  <--- TODO This makes algorithm blocking.
-                                                   // TODO It is possible to make CAS: null -> TAKEN_VALUE so
-                                                   // TODO we'll have a progress, but it requires CAS on set operation
-                                                   // TODO too and guarantees obstruction-freedom only.
-                while (headValue == null) headValue = head._data[headDeqIdx * 2]
-                // Check if the value is receiver specific or not
-                if (headValue == RECEIVER_VALUE) {
-                    // Try to remove receiver
+                // Queue is not empty and 'headDeqIdx < headEnqIdx'.
+                // Try to remove the required continuation if waiting queue contains required ones,
+                // otherwise try to add the current one to the queue.
+                var firstElement = head._data[headDeqIdx * 2]
+                // Spin wait until the element is set
+                // TODO This spin wait makes the algorithm blocking. It is technically possible
+                // TODO to change elements via CAS (null -> value) and instead of waiting here,
+                // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
+                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+                // Check if the value is related to the required operation in order to make a rendezvous.
+                // TODO maybe it is better to inline this function in order to get rid of this 'if' statement
+                val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
+                if (makeRendezvous) {
+                    // Try to remove the continuation from 'headDeqIdx' position
                     if (deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)) {
-                        val receiverCont = head._data[headDeqIdx * 2 + 1] as CancellableContinuation<E>
+                        // Get continuation
+                        val cont = head._data[headDeqIdx * 2 + 1] as CancellableContinuation<in Any>
+                        // Clear the slot to avoid memory leaks
                         head._data[headDeqIdx * 2 + 1] = TAKEN_CONTINUATION
-                        // Try to resume receiver
-                        val token = receiverCont.tryResume(element)
+                        head._data[headDeqIdx * 2] = TAKEN_ELEMENT
+                        // Try to resume continuation
+                        val value = if (element == RECEIVER_ELEMENT) Unit else element
+                        val token = cont.tryResume(value)
                         if (token != null) {
-                            // Receiver is going to be resumed successfully
-                            receiverCont.completeResume(token)
-                            // Resume us as well
-                            curCont.resume(Unit)
+                            // The continuation is going to be resumed successfully
+                            cont.completeResume(token)
+                            // Resume the current continuation as well
+                            val curValue = (if (element == RECEIVER_ELEMENT) firstElement else Unit) as T
+                            curCont.resume(curValue)
                             return@sc
+                        } else {
+                            // TODO coroutine has been cancelled, do something with that
                         }
                     }
                 } else {
-                    // The sender should be added
-                    // Check if tail segment is full and create a new node if needed
+                    // Try to add the current continuation to the end of the queue.
+                    // Move tail forward (and create a new node if needed)
+                    // if the current tail segment is full.
                     if (tailEnqIdx == segmentSize) {
                         val tailNext = tail._next
                         if (tailNext != null) {
-                            // Help with tail moving
+                            // Move tail forward. If this CAS fails, another thread moved it
                             tailUpdater.compareAndSet(this, tail, tailNext)
                         } else {
-                            // Create new segment and add it as 'tail._next'
-                            val node = Node<E>(segmentSize)
+                            // Create new node. If CAS fails, another thread added a new one
+                            val node = Node(segmentSize)
                             if (nextUpdater.compareAndSet(tail, null, node)) {
-                                // New segment is added successfully, help to move tail
+                                // Move tail forward. If this CAS fails, another thread moved it
                                 tailUpdater.compareAndSet(this, tail, node)
                             }
                         }
                     } else {
+                        // Add the current continuation to the 'tail'
                         if (enqIdxUpdater.compareAndSet(tail, tailEnqIdx, tailEnqIdx + 1)) {
-                            // Add sender to the claimed slot
-                            tail._data[tailEnqIdx * 2 + 1] = curCont
-                            tail._data[tailEnqIdx * 2] = element
-                            curCont.initCancellability()
+                            // Slot with 'tailEnqIdx' index claimed, store the current continuation
+                            storeContinuation(tail, tailEnqIdx, curCont, element)
                             return@sc
                         }
                     }
@@ -149,106 +177,148 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
             }
         }
     }
+
+    private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any) {
+        // Slot with 'tailEnqIdx' index claimed, add the continuation and the element (in this order!)
+        node._data[index * 2 + 1] = cont
+        node._data[index * 2] = element
+        // Init cancellability and suspend
+        cont.initCancellability()
+        cont.invokeOnCompletion { /* TODO cancellation */ }
+    }
+
+    private suspend fun sendSuspend(element: E) = sendOrReceiveSuspend<Unit>(element!!)
 
     override fun offer(element: E): Boolean {
-        return false
-    }
-
-    suspend override fun receive(): E = suspendAtomicCancellableCoroutine<E>(holdCancellability = true) sc@ { curCont ->
-        while (true) { // CAS-loop
+        while (true) { // CAS loop
+            // Read tail and its enqueue index at first, then head and its indexes
             val head = _head
             val headDeqIdx = head._deqIdx
             val headEnqIdx = head._enqIdx
-
-            val tail = _tail
-            val tailDeqIdx = tail._deqIdx
-            val tailEnqIdx = tail._enqIdx
-
+            // If the waiting queue is empty, 'headDeqIdx == headEnqIdx'.
+            // But they also could be equal if the 'head' node is full.
             if (headDeqIdx == headEnqIdx) {
-                // Queue is empty or _head should be moved forward (CAS to _next)
+                // Check if the node is full
                 if (headDeqIdx == segmentSize) {
-                    // Segment is full, move _next forward
+                    // 'head' node is full, try to move '_head' pointer forward and create a new node if needed
                     val headNext = head._next
                     if (headNext != null) {
+                        // Move '_head' forward. If CAS fails, another thread moved it.
                         headUpdater.compareAndSet(this, head, headNext)
                     } else {
-                        // Queue is empty, add a new segment
-                        check(head == tail, { "Queue is empty, head and tail should point to the same node" })
-                        // Create new segment and add it as 'tail._next'
-                        val node = Node<E>(segmentSize)
-                        if (nextUpdater.compareAndSet(tail, null, node)) {
-                            // New segment is added successfully, help to move tail
-                            tailUpdater.compareAndSet(this, tail, node)
-                        }
+                        // Queue is empty, return 'false'
+                        return false
                     }
                 } else {
-                    check(head == tail, { "Queue has one segment only" })
-                    // Try to add receiver to the waiting queue at index 'headEnqIdx'
-                    if (enqIdxUpdater.compareAndSet(head, headEnqIdx, headEnqIdx + 1)) {
-                        head._data[headEnqIdx * 2 + 1] = curCont
-                        head._data[headEnqIdx * 2] = RECEIVER_VALUE
-                        curCont.initCancellability()
-                        return@sc
-                    }
+                    // Queue is empty, return 'false'
+                    return false
                 }
             } else {
-                // Queue is not empty. Remove receiver from the head
-                // or add the sender to the tail.
-                var headValue = head._data[headDeqIdx * 2]
-                // Spin wait until value is set  <--- TODO This makes algorithm blocking.
-                // TODO It is possible to make CAS: null -> TAKEN_VALUE so
-                // TODO we'll have a progress, but it requires CAS on set operation
-                // TODO too and guarantees obstruction-freedom only.
-                while (headValue == null) headValue = head._data[headDeqIdx * 2]
-                // Check if the value is receiver specific or not
-                if (headValue != RECEIVER_VALUE) {
-                    // Try to remove receiver
+                // Queue is not empty and 'headDeqIdx < headEnqIdx'.
+                // Try to remove the required continuation if waiting queue contains required ones,
+                // otherwise try to add the current one to the queue.
+                var firstElement = head._data[headDeqIdx * 2]
+                // Spin wait until the element is set
+                // TODO This spin wait makes the algorithm blocking. It is technically possible
+                // TODO to change elements via CAS (null -> value) and instead of waiting here,
+                // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
+                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+                // Check if the value is related to the required operation in order to make a rendezvous.
+                val makeRendezvous = firstElement == RECEIVER_ELEMENT
+                if (makeRendezvous) {
+                    // Try to remove the continuation from 'headDeqIdx' position
                     if (deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)) {
-                        val sender = head._data[headDeqIdx * 2 + 1] as CancellableContinuation<Unit>
-                        val element = head._data[headDeqIdx * 2] as E
+                        // Get continuation
+                        val cont = head._data[headDeqIdx * 2 + 1] as CancellableContinuation<in Any>
+                        // Clear the slot to avoid memory leaks
                         head._data[headDeqIdx * 2 + 1] = TAKEN_CONTINUATION
-                        // Try to resume receiver
-                        val token = sender.tryResume(Unit)
+                        head._data[headDeqIdx * 2] = TAKEN_ELEMENT
+                        // Try to resume continuation
+                        val token = cont.tryResume(element!!)
                         if (token != null) {
-                            // Receiver is going to be resumed successfully
-                            sender.completeResume(token)
-                            // Resume us as well
-                            curCont.resume(element)
-                            return@sc
+                            // The continuation is going to be resumed successfully
+                            cont.completeResume(token)
+                            // Rendezvous! Return 'true'
+                            return true
+                        } else {
+                            // TODO coroutine has been cancelled, do something with that
                         }
                     }
                 } else {
-                    // The sender should be added
-                    // Check if tail segment is full and create a new node if needed
-                    if (tailEnqIdx == segmentSize) {
-                        val tailNext = tail._next
-                        if (tailNext != null) {
-                            // Help with tail moving
-                            tailUpdater.compareAndSet(this, tail, tailNext)
-                        } else {
-                            // Create new segment and add it as 'tail._next'
-                            val node = Node<E>(segmentSize)
-                            if (nextUpdater.compareAndSet(tail, null, node)) {
-                                // New segment is added successfully, help to move tail
-                                tailUpdater.compareAndSet(this, tail, node)
-                            }
-                        }
-                    } else {
-                        if (enqIdxUpdater.compareAndSet(tail, tailEnqIdx, tailEnqIdx + 1)) {
-                            // Add receiver to the claimed slot
-                            tail._data[tailEnqIdx * 2 + 1] = curCont
-                            tail._data[tailEnqIdx * 2] = RECEIVER_VALUE
-                            curCont.initCancellability()
-                            return@sc
-                        }
-                    }
+                   // The queue has senders, cannot be continued without suspend
+                   return false
                 }
             }
         }
     }
 
+    suspend override fun receive(): E {
+        return poll() ?: receiveSuspend()
+    }
+
+    private suspend fun receiveSuspend(): E = sendOrReceiveSuspend<E>(RECEIVER_ELEMENT)
+
     override fun poll(): E? {
-        return null
+        while (true) { // CAS loop
+            // Read tail and its enqueue index at first, then head and its indexes
+            val head = _head
+            val headDeqIdx = head._deqIdx
+            val headEnqIdx = head._enqIdx
+            // If the waiting queue is empty, 'headDeqIdx == headEnqIdx'.
+            // But they also could be equal if the 'head' node is full.
+            if (headDeqIdx == headEnqIdx) {
+                // Check if the node is full
+                if (headDeqIdx == segmentSize) {
+                    // 'head' node is full, try to move '_head' pointer forward and create a new node if needed
+                    val headNext = head._next
+                    if (headNext != null) {
+                        // Move '_head' forward. If CAS fails, another thread moved it.
+                        headUpdater.compareAndSet(this, head, headNext)
+                    } else {
+                        // Queue is empty, return 'null'
+                        return null
+                    }
+                } else {
+                    // Queue is empty, return 'null'
+                    return null
+                }
+            } else {
+                // Queue is not empty and 'headDeqIdx < headEnqIdx'.
+                // Try to remove the required continuation if waiting queue contains required ones,
+                // otherwise try to add the current one to the queue.
+                var firstElement = head._data[headDeqIdx * 2]
+                // Spin wait until the element is set
+                // TODO This spin wait makes the algorithm blocking. It is technically possible
+                // TODO to change elements via CAS (null -> value) and instead of waiting here,
+                // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
+                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+                // Check if the value is related to the required operation in order to make a rendezvous.
+                val makeRendezvous = firstElement != RECEIVER_ELEMENT
+                if (makeRendezvous) {
+                    // Try to remove the continuation from 'headDeqIdx' position
+                    if (deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)) {
+                        // Get continuation
+                        val cont = head._data[headDeqIdx * 2 + 1] as CancellableContinuation<in Any>
+                        // Clear the slot to avoid memory leaks
+                        head._data[headDeqIdx * 2 + 1] = TAKEN_CONTINUATION
+                        head._data[headDeqIdx * 2] = TAKEN_ELEMENT
+                        // Try to resume continuation
+                        val token = cont.tryResume(Unit)
+                        if (token != null) {
+                            // The continuation is going to be resumed successfully
+                            cont.completeResume(token)
+                            // Rendezvous! Return removed element.
+                            return firstElement as E
+                        } else {
+                            // TODO coroutine has been cancelled, do something with that
+                        }
+                    }
+                } else {
+                    // The queue has receivers, cannot be continued without suspend
+                    return null
+                }
+            }
+        }
     }
 
     override fun close(cause: Throwable?): Boolean {
@@ -277,30 +347,6 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
     }
 }
 
-private val TAKEN_VALUE = Symbol("TAKEN_VALUE")
+private val TAKEN_ELEMENT = Symbol("TAKEN_ELEMENT")
 private val TAKEN_CONTINUATION = Symbol("TAKEN_CONTINUATION")
-private val RECEIVER_VALUE = Symbol("RECEIVER_VALUE")
-
-
-
-
-
-class RendezvousChannelElizarov<E> : ChannelKoval<E> {
-    private val c = RendezvousChannel<E>()
-
-    suspend override fun send(element: E) = c.send(element)
-    override fun offer(element: E): Boolean = c.offer(element)
-
-    suspend override fun receive(): E = c.receive()
-    override fun poll(): E? = c.poll()
-
-    override fun close(cause: Throwable?): Boolean {
-        TODO("not implemented")
-    }
-
-    override val onReceive: SelectClause1<E>
-        get() = TODO("not implemented")
-
-    override val onSend: SelectClause2<E, ChannelKoval<E>>
-        get() = TODO("not implemented")
-}
+private val RECEIVER_ELEMENT = Symbol("RECEIVER_ELEMENT")
