@@ -1,54 +1,45 @@
 package kotlinx.coroutines.experimental.channels.koval
 
 import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.RendezvousChannel
 import kotlinx.coroutines.experimental.internal.Symbol
 import kotlinx.coroutines.experimental.selects.SelectClause1
 import kotlinx.coroutines.experimental.selects.SelectClause2
 import sun.misc.Contended
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import java.util.concurrent.atomic.AtomicReferenceArray
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
 
 fun main(args: Array<String>) = runBlocking {
-    val TOTAL_WORK = 100_000_000
-    val COROUTINES = 10000
+    val TOTAL_WORK = 1_000_000
+//    val TOTAL_WORK = 100_000_000
+    val COROUTINES = 1000
+//    val COROUTINES = 10000
 
     check(TOTAL_WORK % COROUTINES == 0)
     check(COROUTINES % 2 == 0)
 
     val LOCAL_WORK = TOTAL_WORK / COROUTINES
 
-    val chK = RendezvousChannelKoval<Int>()
-    val startKoval = System.currentTimeMillis()
-    List(COROUTINES) {id ->
-        launch {
-            if (id % 2 == 0) {
-                repeat(LOCAL_WORK) { chK.send(id) }
-            } else {
-                repeat(LOCAL_WORK) { chK.receive() }
-            }
+    val work: (ChannelKoval<Int>) -> Unit = { ch ->
+        val start = System.currentTimeMillis()
+        runBlocking {
+            List(COROUTINES) { id ->
+                launch {
+                    if (id % 2 == 0) {
+                        repeat(LOCAL_WORK) { ch.send(id) }
+                    } else {
+                        repeat(LOCAL_WORK) { ch.receive() }
+                    }
+                }
+            }.forEach { it.join() }
         }
-    }.forEach{ it.join() }
-    val endKoval = System.currentTimeMillis()
+        val time = System.currentTimeMillis() - start
+        println("${ch.classSimpleName}: $time ms")
+    }
 
-
-    val chE = RendezvousChannel<Int>()
-    val startElizarov = System.currentTimeMillis()
-    List(COROUTINES) {id ->
-        launch {
-            if (id % 2 == 0) {
-                repeat(LOCAL_WORK) { chE.send(id) }
-            } else {
-                repeat(LOCAL_WORK) { chE.receive() }
-            }
-        }
-    }.forEach{ it.join() }
-    val endElizarov = System.currentTimeMillis()
-
-    println("Koval=${endKoval - startKoval}, Elizarov=${endElizarov - startElizarov}")
+    work(RendezvousChannelKoval())
+    work(RendezvousChannelKovalMSQueue())
 }
 
 
@@ -76,7 +67,11 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
 
     suspend override fun send(element: E) {
         if (offer(element)) return // fast path
-        sendSuspend(element)
+        sendOrReceiveSuspend<Unit>(element!!)
+    }
+
+    suspend override fun receive(): E {
+        return poll() ?: sendOrReceiveSuspend(RECEIVER_ELEMENT)
     }
 
     private suspend fun <T> sendOrReceiveSuspend(element: Any) = suspendAtomicCancellableCoroutine<T>(holdCancellability = true) sc@ { curCont ->
@@ -187,8 +182,6 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
         cont.invokeOnCompletion { /* TODO cancellation */ }
     }
 
-    private suspend fun sendSuspend(element: E) = sendOrReceiveSuspend<Unit>(element!!)
-
     override fun offer(element: E): Boolean {
         while (true) { // CAS loop
             // Read tail and its enqueue index at first, then head and its indexes
@@ -251,12 +244,6 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
             }
         }
     }
-
-    suspend override fun receive(): E {
-        return poll() ?: receiveSuspend()
-    }
-
-    private suspend fun receiveSuspend(): E = sendOrReceiveSuspend<E>(RECEIVER_ELEMENT)
 
     override fun poll(): E? {
         while (true) { // CAS loop

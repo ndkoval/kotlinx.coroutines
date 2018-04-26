@@ -5,6 +5,7 @@ import kotlinx.coroutines.experimental.asCoroutineDispatcher
 import kotlinx.coroutines.experimental.channels.RendezvousChannel
 import kotlinx.coroutines.experimental.channels.koval.ChannelKoval
 import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKoval
+import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKovalMSQueue
 import kotlinx.coroutines.experimental.launch
 import kotlinx.coroutines.experimental.runBlocking
 import kotlinx.coroutines.experimental.sync.Mutex
@@ -31,6 +32,7 @@ open class ChannelBenchmark {
     private var coroutines: Int = 0
 
     private val rendezvousChK = RendezvousChannelKoval<Int>()
+    private val rendezvousChKMSQueue = RendezvousChannelKovalMSQueue<Int>()
     private val rendezvousChE = RendezvousChannel<Int>()
 
     private lateinit var dispatcher: CoroutineDispatcher
@@ -38,6 +40,22 @@ open class ChannelBenchmark {
     @Setup
     fun setup() {
         dispatcher = ForkJoinPool(threads).asCoroutineDispatcher()
+    }
+
+    @Benchmark
+    fun producerConsumerBalancedKovalMSQueue(blackhole: Blackhole) = runBlocking {
+        val jobs = List(coroutines) { index ->
+            launch(dispatcher) {
+                repeat(TOTAL_OPERATIONS / coroutines) {
+                    if (index % 2 == 0) {
+                        rendezvousChKMSQueue.send(index)
+                    } else {
+                        blackhole.consume(rendezvousChKMSQueue.receive())
+                    }
+                }
+            }
+        }
+        jobs.forEach { it.join() }
     }
 
     @Benchmark
