@@ -2,6 +2,7 @@ package benchmarks
 
 import kotlinx.coroutines.experimental.CoroutineDispatcher
 import kotlinx.coroutines.experimental.asCoroutineDispatcher
+import kotlinx.coroutines.experimental.channels.Channel
 import kotlinx.coroutines.experimental.channels.RendezvousChannel
 import kotlinx.coroutines.experimental.channels.koval.ChannelKoval
 import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKoval
@@ -31,62 +32,59 @@ open class ChannelBenchmark {
     @Param("2", "10", "100", "1000", "10000")
     private var coroutines: Int = 0
 
-    private val rendezvousChK = RendezvousChannelKoval<Int>()
-    private val rendezvousChKMSQueue = RendezvousChannelKovalMSQueue<Int>()
-    private val rendezvousChE = RendezvousChannel<Int>()
+    @Param("1", "2", "5", "20")
+    private var contentionFactor: Int = 0
 
+    @Param
+    private lateinit var channelCreator: ChannelViewCreator
+
+    private lateinit var channels: List<ChannelView>
     private lateinit var dispatcher: CoroutineDispatcher
 
     @Setup
     fun setup() {
         dispatcher = ForkJoinPool(threads).asCoroutineDispatcher()
+        channels = List(contentionFactor, { channelCreator.create() })
     }
 
     @Benchmark
-    fun producerConsumerBalancedKovalMSQueue(blackhole: Blackhole) = runBlocking {
+    fun producerConsumer(blackhole: Blackhole) = runBlocking {
+        if (coroutines < contentionFactor * 2) return@runBlocking
         val jobs = List(coroutines) { index ->
+            val channel = channels[index % contentionFactor]
             launch(dispatcher) {
                 repeat(TOTAL_OPERATIONS / coroutines) {
                     if (index % 2 == 0) {
-                        rendezvousChKMSQueue.send(index)
+                        channel.send(index)
                     } else {
-                        blackhole.consume(rendezvousChKMSQueue.receive())
+                        blackhole.consume(channel.receive())
                     }
                 }
             }
         }
         jobs.forEach { it.join() }
     }
+}
 
-    @Benchmark
-    fun producerConsumerBalancedKoval(blackhole: Blackhole) = runBlocking {
-        val jobs = List(coroutines) { index ->
-            launch(dispatcher) {
-                repeat(TOTAL_OPERATIONS / coroutines) {
-                    if (index % 2 == 0) {
-                        rendezvousChK.send(index)
-                    } else {
-                        blackhole.consume(rendezvousChK.receive())
-                    }
-                }
-            }
-        }
-        jobs.forEach { it.join() }
-    }
+internal interface ChannelView {
+    suspend fun send(element: Int)
+    suspend fun receive(): Int
+}
 
-    @Benchmark
-    fun producerConsumerBalancedElizarov(blackhole: Blackhole) = runBlocking {
-        val jobs = List(coroutines) { index ->
-            launch(dispatcher) {
-                repeat(TOTAL_OPERATIONS / coroutines) {
-                    if (index % 2 == 0) {
-                        rendezvousChE.send(index)
-                    } else {
-                        blackhole.consume(rendezvousChE.receive())
-                    }
-                }
-            }
-        }
-        jobs.forEach { it.join() }
-    }
+internal enum class ChannelViewCreator(val create: () -> ChannelView) {
+    ELIZAROV_RENDEZVOUS({ object : ChannelView {
+        val c = RendezvousChannel<Int>()
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>()
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_MS_RENDEZVOUS({ object : ChannelView {
+        val c = RendezvousChannelKovalMSQueue<Int>()
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }})
 }
