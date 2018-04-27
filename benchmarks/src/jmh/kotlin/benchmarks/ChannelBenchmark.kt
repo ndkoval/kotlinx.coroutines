@@ -49,12 +49,13 @@ open class ChannelBenchmark {
 
     @Benchmark
     fun producerConsumer(blackhole: Blackhole) = runBlocking {
-        if (coroutines < contentionFactor * 2) return@runBlocking
+        if (coroutines % contentionFactor * 2 != 0) return@runBlocking
         val jobs = List(coroutines) { index ->
             val channel = channels[index % contentionFactor]
+            val sender = (index / contentionFactor) % 2 == 0
             launch(dispatcher) {
                 repeat(TOTAL_OPERATIONS / coroutines) {
-                    if (index % 2 == 0) {
+                    if (sender) {
                         channel.send(index)
                     } else {
                         blackhole.consume(channel.receive())
