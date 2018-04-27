@@ -1,6 +1,7 @@
 package kotlinx.coroutines.experimental.channels.koval
 
 import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.experimental.channels.RendezvousChannel
 import kotlinx.coroutines.experimental.internal.Symbol
 import kotlinx.coroutines.experimental.selects.SelectClause1
 import kotlinx.coroutines.experimental.selects.SelectClause2
@@ -11,7 +12,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
 
 fun main(args: Array<String>) = runBlocking {
-    val TOTAL_WORK = 1_000_000
+    val TOTAL_WORK = 10_000_000
 //    val TOTAL_WORK = 100_000_000
     val COROUTINES = 1000
 //    val COROUTINES = 10000
@@ -38,8 +39,25 @@ fun main(args: Array<String>) = runBlocking {
         println("${ch.classSimpleName}: $time ms")
     }
 
-    work(RendezvousChannelKoval())
-    work(RendezvousChannelKovalMSQueue())
+    val workHard: (() -> ChannelKoval<Int>) -> Unit = { chCreator ->
+        repeat(10) { work(chCreator()) }
+    }
+
+    workHard { RendezvousChannelKovalMSQueue() }
+    workHard { RendezvousChannelKovalStack() }
+    workHard { RendezvousChannelKoval() }
+    workHard { object : ChannelKoval<Int> {
+        val c = RendezvousChannel<Int>()
+
+        override suspend fun send(element: Int) = c.send(element)
+        override fun offer(element: Int): Boolean = c.offer(element)
+        override suspend fun receive(): Int = c.receive()
+        override fun poll(): Int? = c.poll()
+        override fun close(cause: Throwable?): Boolean = c.close(cause)
+
+        override val onReceive: SelectClause1<Int> get() = TODO("not implemented")
+        override val onSend: SelectClause2<Int, ChannelKoval<Int>> get() = TODO("not implemented")
+    }}
 }
 
 
@@ -53,10 +71,10 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
         @JvmField val _data = AtomicReferenceArray<Any?>(segmentSize * 2)
     }
 
-    @Contended @Volatile
+    @Volatile
     private var _head: Node
 
-    @Contended @Volatile
+    @Volatile
     private var _tail: Node
 
     init {

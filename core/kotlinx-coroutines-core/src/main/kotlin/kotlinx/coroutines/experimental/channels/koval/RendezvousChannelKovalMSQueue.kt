@@ -11,11 +11,13 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
 
     abstract class Node(@JvmField @Volatile var _next: Node? = null)
 
-    class SenderNode(val cont: CancellableContinuation<Unit>, val element: Any) : Node()
-    class ReceiverNode(val cont: CancellableContinuation<*>) : Node()
+    class SenderNode(@JvmField val cont: CancellableContinuation<Unit>, @JvmField val element: Any) : Node()
+    class ReceiverNode(@JvmField val cont: CancellableContinuation<*>) : Node()
 
-    @JvmField @Volatile var _head: Node
-    @JvmField @Volatile var _tail: Node
+    @Volatile
+    private var _head: Node
+    @Volatile
+    private var _tail: Node
 
     init {
         val sentinel = object : Node(){}

@@ -2,18 +2,15 @@ package benchmarks
 
 import kotlinx.coroutines.experimental.CoroutineDispatcher
 import kotlinx.coroutines.experimental.asCoroutineDispatcher
-import kotlinx.coroutines.experimental.channels.Channel
 import kotlinx.coroutines.experimental.channels.RendezvousChannel
-import kotlinx.coroutines.experimental.channels.koval.ChannelKoval
 import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKoval
 import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKovalMSQueue
+import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKovalStack
 import kotlinx.coroutines.experimental.launch
 import kotlinx.coroutines.experimental.runBlocking
-import kotlinx.coroutines.experimental.sync.Mutex
 import org.openjdk.jmh.annotations.*
 import org.openjdk.jmh.infra.Blackhole
 import java.util.concurrent.ForkJoinPool
-import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
 
 @Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)
@@ -85,6 +82,11 @@ internal enum class ChannelViewCreator(val create: () -> ChannelView) {
     }}),
     KOVAL_MS_RENDEZVOUS({ object : ChannelView {
         val c = RendezvousChannelKovalMSQueue<Int>()
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_STACK_RENDEZVOUS({ object : ChannelView {
+        val c = RendezvousChannelKovalStack<Int>()
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
     }})
