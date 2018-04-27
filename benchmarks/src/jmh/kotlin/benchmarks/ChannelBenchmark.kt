@@ -75,8 +75,23 @@ internal enum class ChannelViewCreator(val create: () -> ChannelView) {
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
     }}),
-    KOVAL_RENDEZVOUS({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>()
+    KOVAL_RENDEZVOUS_SPIN_1({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 1)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_5({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 5)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_20({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 20)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_100({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 100)
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
     }}),

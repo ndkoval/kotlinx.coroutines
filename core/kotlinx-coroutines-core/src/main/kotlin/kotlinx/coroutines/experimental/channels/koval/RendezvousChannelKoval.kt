@@ -43,25 +43,28 @@ fun main(args: Array<String>) = runBlocking {
         repeat(10) { work(chCreator()) }
     }
 
-    workHard { RendezvousChannelKovalMSQueue() }
-    workHard { RendezvousChannelKovalStack() }
+//    workHard { RendezvousChannelKovalMSQueue() }
+//    workHard { RendezvousChannelKovalStack() }
     workHard { RendezvousChannelKoval() }
-    workHard { object : ChannelKoval<Int> {
-        val c = RendezvousChannel<Int>()
-
-        override suspend fun send(element: Int) = c.send(element)
-        override fun offer(element: Int): Boolean = c.offer(element)
-        override suspend fun receive(): Int = c.receive()
-        override fun poll(): Int? = c.poll()
-        override fun close(cause: Throwable?): Boolean = c.close(cause)
-
-        override val onReceive: SelectClause1<Int> get() = TODO("not implemented")
-        override val onSend: SelectClause2<Int, ChannelKoval<Int>> get() = TODO("not implemented")
-    }}
+//    workHard { object : ChannelKoval<Int> {
+//        val c = RendezvousChannel<Int>()
+//
+//        override suspend fun send(element: Int) = c.send(element)
+//        override fun offer(element: Int): Boolean = c.offer(element)
+//        override suspend fun receive(): Int = c.receive()
+//        override fun poll(): Int? = c.poll()
+//        override fun close(cause: Throwable?): Boolean = c.close(cause)
+//
+//        override val onReceive: SelectClause1<Int> get() = TODO("not implemented")
+//        override val onSend: SelectClause2<Int, ChannelKoval<Int>> get() = TODO("not implemented")
+//    }}
 }
 
 
-class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval<E> {
+class RendezvousChannelKoval<E>(
+        private val segmentSize: Int = 32,
+        private val spinThreshold: Int = 50
+): ChannelKoval<E> {
     private class Node(segmentSize: Int) {
         @Volatile @JvmField var _deqIdx = 0
         @Volatile @JvmField var _enqIdx = 0
@@ -196,7 +199,7 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
     }
 
     private fun readElement(node: Node, index: Int): Any? {
-        for (i in 1 .. 5) {
+        for (i in 1 .. 50) {
             val element = node._data[index * 2]
             if (element != null) return element
         }
