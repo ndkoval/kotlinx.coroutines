@@ -203,7 +203,7 @@ class RendezvousChannelKoval<E>(
 
     private fun readElement(node: Node, index: Int): Any? {
         val i = index * 2
-        for (attempt in 1 .. 50) {
+        for (attempt in 1 .. spinThreshold) {
             val element = node._data[i]
             if (element != null) return element
         }
