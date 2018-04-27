@@ -63,7 +63,7 @@ fun main(args: Array<String>) = runBlocking {
 
 class RendezvousChannelKoval<E>(
         private val segmentSize: Int = 32,
-        private val spinThreshold: Int = 50
+        private val spinThreshold: Int = 10
 ): ChannelKoval<E> {
     private class Node(segmentSize: Int) {
         @Volatile @JvmField var _deqIdx = 0
@@ -86,12 +86,12 @@ class RendezvousChannelKoval<E>(
         _tail = sentinelNode
     }
 
-    suspend override fun send(element: E) {
+    override suspend fun send(element: E) {
         if (offer(element)) return // fast path
         sendOrReceiveSuspend<Unit>(element!!)
     }
 
-    suspend override fun receive(): E {
+    override suspend fun receive(): E {
         return poll() ?: sendOrReceiveSuspend(RECEIVER_ELEMENT)
     }
 
@@ -140,9 +140,7 @@ class RendezvousChannelKoval<E>(
                 // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
 //                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
 
-                val firstElement = readElement(head, headDeqIdx)
-                if (firstElement == null)
-                    continue
+                val firstElement = readElement(head, headDeqIdx) ?: continue
                 // Check if the value is related to the required operation in order to make a rendezvous.
                 // TODO maybe it is better to inline this function in order to get rid of this 'if' statement
                 val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
@@ -248,12 +246,15 @@ class RendezvousChannelKoval<E>(
                 // Queue is not empty and 'headDeqIdx < headEnqIdx'.
                 // Try to remove the required continuation if waiting queue contains required ones,
                 // otherwise try to add the current one to the queue.
-                var firstElement = head._data[headDeqIdx * 2]
+//                var firstElement = head._data[headDeqIdx * 2]
                 // Spin wait until the element is set
                 // TODO This spin wait makes the algorithm blocking. It is technically possible
                 // TODO to change elements via CAS (null -> value) and instead of waiting here,
                 // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
-                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+//                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+
+                val firstElement = readElement(head, headDeqIdx) ?: continue
+
                 // Check if the value is related to the required operation in order to make a rendezvous.
                 val makeRendezvous = firstElement == RECEIVER_ELEMENT
                 if (makeRendezvous) {
@@ -311,13 +312,16 @@ class RendezvousChannelKoval<E>(
                 // Queue is not empty and 'headDeqIdx < headEnqIdx'.
                 // Try to remove the required continuation if waiting queue contains required ones,
                 // otherwise try to add the current one to the queue.
-                var firstElement = head._data[headDeqIdx * 2]
+//                var firstElement = head._data[headDeqIdx * 2]
                 // Spin wait until the element is set
                 // TODO This spin wait makes the algorithm blocking. It is technically possible
                 // TODO to change elements via CAS (null -> value) and instead of waiting here,
                 // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
-                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+//                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
                 // Check if the value is related to the required operation in order to make a rendezvous.
+
+                val firstElement = readElement(head, headDeqIdx) ?: continue
+
                 val makeRendezvous = firstElement != RECEIVER_ELEMENT
                 if (makeRendezvous) {
                     // Try to remove the continuation from 'headDeqIdx' position
