@@ -35,7 +35,6 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
     private suspend fun receiveSuspend() = suspendAtomicCancellableCoroutine<E>(holdCancellability = true) sc@ { curCont ->
         while (true) {
             val tail = _tail
-            val tailNext = tail._next
             val head = _head
             val headNext = head._next
             if (headNext is SenderNode) {
@@ -54,6 +53,7 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
             } else {
                 // Queue is empty or contains receivers,
                 // try to add the current continuation to the queue
+                val tailNext = tail._next
                 if (tailNext != null) {
                     tailUpdater.compareAndSet(this, tail, tailNext)
                 } else {
@@ -108,8 +108,6 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
 
     override fun offer(element: E): Boolean {
         while (true) {
-            val tail = _tail
-            val tailNext = tail._next
             val head = _head
             val headNext = head._next
             if (headNext is ReceiverNode) {
@@ -130,8 +128,6 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
 
     override fun poll(): E? {
         while (true) {
-            val tail = _tail
-            val tailNext = tail._next
             val head = _head
             val headNext = head._next
             if (headNext is SenderNode) {
