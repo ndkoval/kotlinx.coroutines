@@ -141,6 +141,11 @@ class RendezvousChannelKoval<E>(
 //                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
 
                 val firstElement = readElement(head, headDeqIdx) ?: continue
+                if (firstElement == TAKEN_ELEMENT) {
+                    deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                    continue
+                }
+
                 // Check if the value is related to the required operation in order to make a rendezvous.
                 // TODO maybe it is better to inline this function in order to get rid of this 'if' statement
                 val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
@@ -197,11 +202,15 @@ class RendezvousChannelKoval<E>(
     }
 
     private fun readElement(node: Node, index: Int): Any? {
-        for (i in 1 .. 50) {
-            val element = node._data[index * 2]
+        val i = index * 2
+        for (attempt in 1 .. 50) {
+            val element = node._data[i]
             if (element != null) return element
         }
-        return null
+        if (node._data.compareAndSet(i, null, TAKEN_ELEMENT))
+            return TAKEN_ELEMENT
+        else
+            return node._data[i]
     }
 
     private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any): Boolean {
@@ -253,7 +262,11 @@ class RendezvousChannelKoval<E>(
                 // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
 //                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
 
-                val firstElement = readElement(head, headDeqIdx) ?: continue
+                val firstElement = readElement(head, headDeqIdx)
+                if (firstElement == TAKEN_ELEMENT) {
+                    deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                    continue
+                }
 
                 // Check if the value is related to the required operation in order to make a rendezvous.
                 val makeRendezvous = firstElement == RECEIVER_ELEMENT
@@ -321,6 +334,10 @@ class RendezvousChannelKoval<E>(
                 // Check if the value is related to the required operation in order to make a rendezvous.
 
                 val firstElement = readElement(head, headDeqIdx) ?: continue
+                if (firstElement == TAKEN_ELEMENT) {
+                    deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                    continue
+                }
 
                 val makeRendezvous = firstElement != RECEIVER_ELEMENT
                 if (makeRendezvous) {
