@@ -122,20 +122,24 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
                     // Queue is empty, try to add the current continuation
                     if (enqIdxUpdater.compareAndSet(head, headEnqIdx, headEnqIdx + 1)) {
                         // Slot with 'headEnqIdx' index claimed, store the current continuation
-                        storeContinuation(head, headEnqIdx, curCont, element)
-                        return@sc
+                        if (storeContinuation(head, headEnqIdx, curCont, element))
+                            return@sc
                     }
                 }
             } else {
                 // Queue is not empty and 'headDeqIdx < headEnqIdx'.
                 // Try to remove the required continuation if waiting queue contains required ones,
                 // otherwise try to add the current one to the queue.
-                var firstElement = head._data[headDeqIdx * 2]
+//                var firstElement = head._data[headDeqIdx * 2]
                 // Spin wait until the element is set
                 // TODO This spin wait makes the algorithm blocking. It is technically possible
                 // TODO to change elements via CAS (null -> value) and instead of waiting here,
                 // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
-                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+//                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
+
+                val firstElement = readElement(head, headDeqIdx)
+                if (firstElement == null)
+                    continue
                 // Check if the value is related to the required operation in order to make a rendezvous.
                 // TODO maybe it is better to inline this function in order to get rid of this 'if' statement
                 val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
@@ -182,8 +186,8 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
                         // Add the current continuation to the 'tail'
                         if (enqIdxUpdater.compareAndSet(tail, tailEnqIdx, tailEnqIdx + 1)) {
                             // Slot with 'tailEnqIdx' index claimed, store the current continuation
-                            storeContinuation(tail, tailEnqIdx, curCont, element)
-                            return@sc
+                            if (storeContinuation(tail, tailEnqIdx, curCont, element))
+                                return@sc
                         }
                     }
                 }
@@ -191,13 +195,26 @@ class RendezvousChannelKoval<E>(private val segmentSize: Int = 32): ChannelKoval
         }
     }
 
-    private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any) {
+    private fun readElement(node: Node, index: Int): Any? {
+        for (i in 1 .. 5) {
+            val element = node._data[index * 2]
+            if (element != null) return element
+        }
+        return null
+    }
+
+    private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any): Boolean {
         // Slot with 'tailEnqIdx' index claimed, add the continuation and the element (in this order!)
         node._data[index * 2 + 1] = cont
-        node._data[index * 2] = element
-        // Init cancellability and suspend
-        cont.initCancellability()
-        cont.invokeOnCompletion { /* TODO cancellation */ }
+        if (node._data.compareAndSet(index * 2, null, element)) {
+            // Init cancellability and suspend
+            cont.initCancellability()
+            cont.invokeOnCompletion { /* TODO cancellation */ }
+            return true
+        } else {
+            node._data[index * 2 + 1] = TAKEN_CONTINUATION
+            return false
+        }
     }
 
     override fun offer(element: E): Boolean {

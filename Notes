@@ -1,9 +1,0 @@
-Problems to solve:
-1. Nonblocking rendezvous implementation
-2. Closing support
-3. Cancellation support
-4. Extending for buffered channel
-5. Extending for unlimited buffered channel
-6. Select expression
-
-4. Broadcast/conflated channels
