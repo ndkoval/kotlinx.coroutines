@@ -49,7 +49,7 @@ open class ChannelBenchmark {
 
     @Benchmark
     fun producerConsumer(blackhole: Blackhole) = runBlocking {
-        if (coroutines % contentionFactor * 2 != 0) return@runBlocking
+        if (coroutines % (contentionFactor * 2) != 0) return@runBlocking
         val jobs = List(coroutines) { index ->
             val channel = channels[index % contentionFactor]
             val sender = (index / contentionFactor) % 2 == 0
