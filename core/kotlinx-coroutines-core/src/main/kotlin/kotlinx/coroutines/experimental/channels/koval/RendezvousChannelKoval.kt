@@ -1,84 +1,30 @@
 package kotlinx.coroutines.experimental.channels.koval
 
 import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.RendezvousChannel
 import kotlinx.coroutines.experimental.internal.Symbol
 import kotlinx.coroutines.experimental.selects.SelectClause1
 import kotlinx.coroutines.experimental.selects.SelectClause2
 import sun.misc.Contended
+import sun.misc.Unsafe
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import java.util.concurrent.atomic.AtomicReferenceArray
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
-
-fun main(args: Array<String>) = runBlocking {
-    val TOTAL_WORK = 10_000_000
-//    val TOTAL_WORK = 100_000_000
-    val COROUTINES = 1000
-//    val COROUTINES = 10000
-
-    check(TOTAL_WORK % COROUTINES == 0)
-    check(COROUTINES % 2 == 0)
-
-    val LOCAL_WORK = TOTAL_WORK / COROUTINES
-
-    val work: (ChannelKoval<Int>) -> Unit = { ch ->
-        val start = System.currentTimeMillis()
-        runBlocking {
-            List(COROUTINES) { id ->
-                launch {
-                    if (id % 2 == 0) {
-                        repeat(LOCAL_WORK) { ch.send(id) }
-                    } else {
-                        repeat(LOCAL_WORK) { ch.receive() }
-                    }
-                }
-            }.forEach { it.join() }
-        }
-        val time = System.currentTimeMillis() - start
-        println("${ch.classSimpleName}: $time ms")
-    }
-
-    val workHard: (() -> ChannelKoval<Int>) -> Unit = { chCreator ->
-        repeat(10) { work(chCreator()) }
-    }
-
-//    workHard { RendezvousChannelKovalMSQueue() }
-//    workHard { RendezvousChannelKovalStack() }
-    workHard { RendezvousChannelKoval() }
-//    workHard { object : ChannelKoval<Int> {
-//        val c = RendezvousChannel<Int>()
-//
-//        override suspend fun send(element: Int) = c.send(element)
-//        override fun offer(element: Int): Boolean = c.offer(element)
-//        override suspend fun receive(): Int = c.receive()
-//        override fun poll(): Int? = c.poll()
-//        override fun close(cause: Throwable?): Boolean = c.close(cause)
-//
-//        override val onReceive: SelectClause1<Int> get() = TODO("not implemented")
-//        override val onSend: SelectClause2<Int, ChannelKoval<Int>> get() = TODO("not implemented")
-//    }}
-}
-
-
 class RendezvousChannelKoval<E>(
         private val segmentSize: Int = 32,
-        private val spinThreshold: Int = 10
+        private val spinThreshold: Int = 500
 ): ChannelKoval<E> {
     private class Node(segmentSize: Int) {
-        @Volatile @JvmField var _deqIdx = 0
-        @Volatile @JvmField var _enqIdx = 0
+        @JvmField @Volatile var _deqIdx = 0
+        @JvmField @Volatile var _enqIdx = 0
 
-        @Volatile @JvmField var _next: Node? = null
+        @JvmField @Volatile var _next: Node? = null
 
         @JvmField val _data = AtomicReferenceArray<Any?>(segmentSize * 2)
     }
 
-    @Volatile
-    private var _head: Node
-
-    @Volatile
-    private var _tail: Node
+    @Volatile private var _head: Node
+    @Volatile private var _tail: Node
 
     init {
         val sentinelNode = Node(segmentSize)
@@ -122,10 +68,11 @@ class RendezvousChannelKoval<E>(
                         }
                     }
                 } else {
+                    if (head != tail || headEnqIdx != tailEnqIdx) continue
                     // Queue is empty, try to add the current continuation
-                    if (enqIdxUpdater.compareAndSet(head, headEnqIdx, headEnqIdx + 1)) {
+                    if (enqIdxUpdater.compareAndSet(tail, tailEnqIdx, tailEnqIdx + 1)) {
                         // Slot with 'headEnqIdx' index claimed, store the current continuation
-                        if (storeContinuation(head, headEnqIdx, curCont, element))
+                        if (storeContinuation(tail, tailEnqIdx, curCont, element))
                             return@sc
                     }
                 }
@@ -198,32 +145,6 @@ class RendezvousChannelKoval<E>(
                     }
                 }
             }
-        }
-    }
-
-    private fun readElement(node: Node, index: Int): Any? {
-        val i = index * 2
-        for (attempt in 1 .. spinThreshold) {
-            val element = node._data[i]
-            if (element != null) return element
-        }
-        if (node._data.compareAndSet(i, null, TAKEN_ELEMENT))
-            return TAKEN_ELEMENT
-        else
-            return node._data[i]
-    }
-
-    private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any): Boolean {
-        // Slot with 'tailEnqIdx' index claimed, add the continuation and the element (in this order!)
-        node._data[index * 2 + 1] = cont
-        if (node._data.compareAndSet(index * 2, null, element)) {
-            // Init cancellability and suspend
-            cont.initCancellability()
-            cont.invokeOnCompletion { /* TODO cancellation */ }
-            return true
-        } else {
-            node._data[index * 2 + 1] = TAKEN_CONTINUATION
-            return false
         }
     }
 
@@ -367,6 +288,32 @@ class RendezvousChannelKoval<E>(
         }
     }
 
+    private fun readElement(node: Node, index: Int): Any? {
+        val i = index * 2
+        for (attempt in 1 .. spinThreshold) {
+            val element = node._data[i]
+            if (element != null) return element
+        }
+        if (node._data.compareAndSet(i, null, TAKEN_ELEMENT))
+            return TAKEN_ELEMENT
+        else
+            return node._data[i]
+    }
+
+    private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any): Boolean {
+        // Slot with 'tailEnqIdx' index claimed, add the continuation and the element (in this order!)
+        node._data[index * 2 + 1] = cont
+        if (node._data.compareAndSet(index * 2, null, element)) {
+            // Init cancellability and suspend
+            cont.initCancellability()
+            cont.invokeOnCompletion { /* TODO cancellation */ }
+            return true
+        } else {
+            node._data[index * 2 + 1] = TAKEN_CONTINUATION
+            return false
+        }
+    }
+
     override fun close(cause: Throwable?): Boolean {
         TODO("not implemented")
     }
@@ -379,17 +326,12 @@ class RendezvousChannelKoval<E>(
 
 
     private companion object {
-        @JvmField
-        val tailUpdater = AtomicReferenceFieldUpdater.newUpdater(RendezvousChannelKoval::class.java, Node::class.java, "_tail")
-        @JvmField
-        val headUpdater = AtomicReferenceFieldUpdater.newUpdater(RendezvousChannelKoval::class.java, Node::class.java, "_head")
-        @JvmField
-        val nextUpdater = AtomicReferenceFieldUpdater.newUpdater(Node::class.java, Node::class.java, "_next")
+        @JvmField val tailUpdater = AtomicReferenceFieldUpdater.newUpdater(RendezvousChannelKoval::class.java, Node::class.java, "_tail")
+        @JvmField val headUpdater = AtomicReferenceFieldUpdater.newUpdater(RendezvousChannelKoval::class.java, Node::class.java, "_head")
+        @JvmField val nextUpdater = AtomicReferenceFieldUpdater.newUpdater(Node::class.java, Node::class.java, "_next")
 
-        @JvmField
-        val deqIdxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "_deqIdx")
-        @JvmField
-        val enqIdxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "_enqIdx")
+        @JvmField val deqIdxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "_deqIdx")
+        @JvmField val enqIdxUpdater = AtomicIntegerFieldUpdater.newUpdater(Node::class.java, "_enqIdx")
     }
 }
 
