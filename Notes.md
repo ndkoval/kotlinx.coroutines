@@ -52,7 +52,9 @@ class WaitingQueue {
 }
 ```
 
-The main idea of such queue implementation is based on using segments in MS queue, so fewer allocations (and GC work) are required and a node could be cached for several send/receive operations. For this purpose, each node has a `_data` array (usually with size 16 or 32), in which coroutines with the elements to be sent are stored. In order to determine is this coroutine receiver or sender, a special `RECEIVER_ELEMENT` is stored for receivers. In order to manage this array, special `_deqIdx` and `_enqIdx` are used which specify indexes for next deque and enque operations respectively. Alike standard MS queue nodes, this implementation has `_next` field to the next node and MS queue algorithm is used for adding/removing these segment nodes.
+The current implementation is based on concurrent doubly-linked list with DCSS descriptors for every `offer` operation in order to check is it valid to add this type of coroutine to the queue or not. First of all, doubly-linked list is used for fast cancellation, which could be organized using flat-combining technique and work in O(1) in average. It also seems that it is possible not to use descriptors for send/receive operations. 
+
+The main idea of such implementation is based on MS queue, but with segment in order to store several values in a node, so fewer allocations (and GC work) are required and a node could be cached for several send/receive operations. For this purpose, each node has a `_data` array (usually with size 16 or 32), in which coroutines with the elements to be sent are stored. In order to determine is this coroutine receiver or sender, a special `RECEIVER_ELEMENT` is stored for receivers. In order to manage this array, special `_deqIdx` and `_enqIdx` are used which specify indexes for next deque and enque operations respectively. Alike standard MS queue nodes, this implementation has `_next` field to the next node and MS queue algorithm is used for adding/removing these segment nodes.
 
 Code for `Node` class:
 
@@ -66,5 +68,8 @@ private class Node {
 }
 ```
 
+The main problem is to guarantee lock-freedom with such structure. In this document blocking version (with spin waits) is presented at first, then the algorithm is extended to obstruction-free and to lock-free.
+
+The blocking algorithm is pretty simple. Bla-bla-bla.
 
 
