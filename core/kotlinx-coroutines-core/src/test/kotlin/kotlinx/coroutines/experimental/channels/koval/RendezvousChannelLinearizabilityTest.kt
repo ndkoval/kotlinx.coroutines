@@ -18,7 +18,7 @@ class ChannelLinearizabilityTest : TestBase() {
 
     @Reset
     fun reset() {
-        channel = RendezvousChannelKoval<Int>()
+        channel = RendezvousChannelKoval<Int>(segmentSize = 2)
     }
 
     @Operation(runOnce = true)

@@ -15,7 +15,7 @@ class RendezvousChannelKoval<E>(
         private val spinThreshold: Int = 300
 ): ChannelKoval<E> {
     // Waiting queue node
-    private class Node(segmentSize: Int) {
+    private class Node(segmentSize: Int, @JvmField val id: Int) {
         // Indexes for deque ([_deqIdx]) and enqueue ([_enqIdx]) operations
         // on the waiting queue. On each operation the required one should be
         // increment in order to perform enqueue or deque.
@@ -34,7 +34,9 @@ class RendezvousChannelKoval<E>(
         // are stored in the same array at indexes `2i` and `2i+1` respectively.
         @JvmField val _data = AtomicReferenceArray<Any?>(segmentSize * 2)
 
-        constructor(segmentSize: Int, cont: CancellableContinuation<*>, element: Any) : this(segmentSize) {
+        constructor(segmentSize: Int, id: Int, cont: CancellableContinuation<*>, element: Any)
+                : this(segmentSize = segmentSize, id = id)
+        {
             _enqIdx = 1
             _data[1] = cont
             _data[0] = element
@@ -49,7 +51,7 @@ class RendezvousChannelKoval<E>(
     init {
         // Initialize queue with empty node similar to MS queue
         // algorithm, but this node is just empty, not sentinel.
-        val emptyNode = Node(segmentSize)
+        val emptyNode = Node(segmentSize, 0)
         _head = emptyNode
         _tail = emptyNode
     }
@@ -77,11 +79,11 @@ class RendezvousChannelKoval<E>(
             // in the waiting queue, it can add the current continuation to the already
             // read tail index if it is not changed. In this case, it is guaranteed that
             // the waiting queue still has the same continuations or is empty.
-            val tail = _tail
-            val tailEnqIdx = tail._enqIdx
-            val head = _head
-            val headDeqIdx = head._deqIdx
-            val headEnqIdx = head._enqIdx
+            var tail = _tail
+            var tailEnqIdx = tail._enqIdx
+            var head = _head
+            var headDeqIdx = head._deqIdx
+            var headEnqIdx = head._enqIdx
             // If the waiting queue is empty, `headDeqIdx == headEnqIdx`.
             // This can also happen if the `head` node is full (`headDeqIdx == segmentSize`).
             if (headDeqIdx == headEnqIdx) {
@@ -110,7 +112,7 @@ class RendezvousChannelKoval<E>(
                 // element value from `null` to `TAKEN_ELEMENT` and increment the deque index if it is not appeared.
                 // In this case the operation should start again. This simple  approach guarantees obstruction-freedom.
                 // TODO make it lock-free using descriptors
-                val firstElement = readElement(head, headDeqIdx)
+                var firstElement = readElement(head, headDeqIdx)
                 if (firstElement == TAKEN_ELEMENT) {
                     // Try to move the deque index in the `head` node
                     deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
@@ -120,22 +122,48 @@ class RendezvousChannelKoval<E>(
                 // and try to remove the first element in this case, try to add the current
                 // continuation to the waiting queue otherwise.
                 val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
+                // TODO documentation
+                val idLimit = tail.id
+                val idxLimit = tailEnqIdx
                 if (makeRendezvous) {
-                    if (tryResumeContinuation(head, headDeqIdx, element)) {
-                        // The rendezvous is happened, congratulations!
-                        // Resume the current continuation
-                        val result = (if (element == RECEIVER_ELEMENT) firstElement else Unit) as T
-                        curCont.resume(result)
-                        return@sc
+                    while (true) {
+                        if (tryResumeContinuation(head, headDeqIdx, element)) {
+                            // The rendezvous is happened, congratulations!
+                            // Resume the current continuation
+                            val result = (if (element == RECEIVER_ELEMENT) firstElement else Unit) as T
+                            curCont.resume(result)
+                            return@sc
+                        }
+                        // Re-read and check current state
+                        head = _head
+                        headDeqIdx = head._deqIdx
+                        if (headDeqIdx == segmentSize) {
+                            adjustHead(head)
+                            continue@try_again
+                        }
+                        if (!(head.id < idLimit || (head.id == idLimit && headDeqIdx < idxLimit))) continue@try_again
+                        firstElement = readElement(head, headDeqIdx)
+                        if (firstElement == TAKEN_ELEMENT) {
+                            deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                            continue@try_again
+                        }
                     }
                 } else {
-                    // Try to add a new node with the current continuation and element
-                    // if the tail is full, otherwise try to store it at the `tailEnqIdx` index.
-                    if (tailEnqIdx == segmentSize) {
-                        if (addNewNode(tail, curCont, element)) return@sc
-                    } else {
-                        if (storeContinuation(tail, tailEnqIdx, curCont, element)) return@sc
-                    }
+//                    while (true) {
+                        // Try to add a new node with the current continuation and element
+                        // if the tail is full, otherwise try to store it at the `tailEnqIdx` index.
+                        if (tailEnqIdx == segmentSize) {
+                            if (addNewNode(tail, curCont, element)) return@sc
+                        } else {
+                            if (storeContinuation(tail, tailEnqIdx, curCont, element)) return@sc
+                        }
+                        // Re-read and check current state
+                        head = _head
+                        headDeqIdx = head._deqIdx
+                        tail = _tail
+                        tailEnqIdx = tail._enqIdx
+                        if (!(head.id < idLimit || (head.id == idLimit && headDeqIdx < idxLimit))) continue@try_again
+//                    }
                 }
             }
         }
@@ -162,7 +190,7 @@ class RendezvousChannelKoval<E>(
             return false
         }
         // Create a new node with this continuation and element and try to add it
-        val node = Node(segmentSize, cont, element)
+        val node = Node(segmentSize, tail.id + 1, cont, element)
         if (nextUpdater.compareAndSet(tail, null, node)) {
             // New node added, try to move tail,
             // if the CAS fails, another thread moved it.
@@ -226,6 +254,27 @@ class RendezvousChannelKoval<E>(
                 return false
             }
         } else return false
+    }
+
+    // Tries to store the current continuation and element (in this order!)
+    // to the specified node at the specified index. Returns `true` on success,
+    // `false` otherwise`.
+    private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any): Boolean {
+        // Try to move enqueue index forward, return `false` if fails
+        if (!enqIdxUpdater.compareAndSet(node, index, index + 1)) return false
+        // Slot `index` is claimed, try to store the continuation and the element (in this order!) to it.
+        // Can fail if another thread marked this slot as broken, return `false` in this case.
+        node._data[index * 2 + 1] = cont
+        if (node._data.compareAndSet(index * 2, null, element)) {
+            // Setup the continuation before suspend
+            cont.initCancellability()
+            cont.invokeOnCompletion { onCancel(node, index) }
+            return true
+        } else {
+            // The slot is broken, clean it and return `false`
+            node._data[index * 2 + 1] = TAKEN_CONTINUATION
+            return false
+        }
     }
 
     // This method is invoked when a continuation stored in
@@ -371,27 +420,6 @@ class RendezvousChannelKoval<E>(
                     return null
                 }
             }
-        }
-    }
-
-    // Tries to store the current continuation and element (in this order!)
-    // to the specified node at the specified index. Returns `true` on success,
-    // `false` otherwise`.
-    private fun storeContinuation(node: Node, index: Int, cont: CancellableContinuation<*>, element: Any): Boolean {
-        // Try to move enqueue index forward, return `false` if fails
-        if (!enqIdxUpdater.compareAndSet(node, index, index + 1)) return false
-        // Slot `index` is claimed, try to store the continuation and the element (in this order!) to it.
-        // Can fail if another thread marked this slot as broken, return `false` in this case.
-        node._data[index * 2 + 1] = cont
-        if (node._data.compareAndSet(index * 2, null, element)) {
-            // Setup the continuation before suspend
-            cont.initCancellability()
-            cont.invokeOnCompletion { onCancel(node, index) }
-            return true
-        } else {
-            // The slot is broken, clean it and return `false`
-            node._data[index * 2 + 1] = TAKEN_CONTINUATION
-            return false
         }
     }
 

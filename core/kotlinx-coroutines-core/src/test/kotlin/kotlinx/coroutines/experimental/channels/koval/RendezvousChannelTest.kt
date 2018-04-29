@@ -26,7 +26,7 @@ import org.junit.Test
 class RendezvousChannelTest : TestBase() {
     @Test
     fun testSimple() = runBlocking {
-        val q = RendezvousChannelKoval<Int>()
+        val q = RendezvousChannelKoval<Int>(2)
 //        check(q.isEmpty && q.isFull)
         expect(1)
         val sender = launch(coroutineContext) {
@@ -54,7 +54,7 @@ class RendezvousChannelTest : TestBase() {
     @Test
     fun testStress() = runBlocking {
         val n = 100_000
-        val q = RendezvousChannelKoval<Int>()
+        val q = RendezvousChannelKoval<Int>(2)
         val sender = launch(coroutineContext) {
             for (i in 1..n) q.send(i)
             expect(2)
@@ -71,7 +71,7 @@ class RendezvousChannelTest : TestBase() {
 
     @Test
     fun testOfferAndPool() = runBlocking {
-        val q = RendezvousChannelKoval<Int>()
+        val q = RendezvousChannelKoval<Int>(2)
         Assert.assertFalse(q.offer(1))
         expect(1)
         launch(coroutineContext) {

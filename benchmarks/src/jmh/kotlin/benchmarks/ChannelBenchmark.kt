@@ -75,48 +75,8 @@ internal enum class ChannelViewCreator(val create: () -> ChannelView) {
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
     }}),
-    KOVAL_RENDEZVOUS_SPIN_1({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 1)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_5({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 5)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_20({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 20)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_50({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 50)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_75({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 75)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_100({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 100)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_150({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 150)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_300({ object : ChannelView {
+    KOVAL_RENDEZVOUS_SPIN_300_NEW({ object : ChannelView {
         val c = RendezvousChannelKoval<Int>(spinThreshold = 300)
-        suspend override fun send(element: Int) = c.send(element)
-        suspend override fun receive(): Int = c.receive()
-    }}),
-    KOVAL_RENDEZVOUS_SPIN_500({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 500)
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
     }})
