@@ -143,9 +143,12 @@ class RendezvousChannelKoval<E>(
                         }
                         if (!(head.id < idLimit || (head.id == idLimit && headDeqIdx < idxLimit))) continue@try_again
                         firstElement = readElement(head, headDeqIdx)
-                        if (firstElement == TAKEN_ELEMENT) {
+                        while (firstElement == TAKEN_ELEMENT) {
                             deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
-                            continue@try_again
+                            headDeqIdx++
+                            if (headDeqIdx == segmentSize || !(head.id < idLimit || (head.id == idLimit && headDeqIdx < idxLimit)))
+                                continue@try_again
+                            firstElement = readElement(head, headDeqIdx)
                         }
                     }
                 } else {
