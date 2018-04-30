@@ -170,10 +170,10 @@ class RendezvousChannelKoval<E>(
                             if (storeContinuation(tail, tailEnqIdx, curCont, element)) return@sc
                         }
                         // Re-read the required pointers
-                        head = _head
-                        headDeqIdx = head._deqIdx
                         tail = _tail
                         tailEnqIdx = tail._enqIdx
+                        head = _head
+                        headDeqIdx = head._deqIdx
                         if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) continue@try_again
                     }
                 }
