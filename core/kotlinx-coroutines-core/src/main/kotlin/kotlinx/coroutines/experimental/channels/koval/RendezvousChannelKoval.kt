@@ -83,7 +83,7 @@ class RendezvousChannelKoval<E>(
             var tailEnqIdx = tail._enqIdx
             var head = _head
             var headDeqIdx = head._deqIdx
-            var headEnqIdx = head._enqIdx
+            val headEnqIdx = head._enqIdx
             // If the waiting queue is empty, `headDeqIdx == headEnqIdx`.
             // This can also happen if the `head` node is full (`headDeqIdx == segmentSize`).
             if (headDeqIdx == headEnqIdx) {
@@ -122,9 +122,14 @@ class RendezvousChannelKoval<E>(
                 // and try to remove the first element in this case, try to add the current
                 // continuation to the waiting queue otherwise.
                 val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
-                // TODO documentation
-                val idLimit = tail.id
-                val idxLimit = tailEnqIdx
+                // If removing the already read continuation fails (due to a failed CAS on moving `_deqIdx` forward)
+                // it is possible not to try do the whole operation again, but to re-read new `_head` and its `_deqIdx`
+                // values and try to remove this continuation if it is located between the already read deque
+                // and enqueue positions. In this case it is guaranteed that the queue contains the same
+                // continuation types as on making the rendezvous decision. The same optimization is possible
+                // for adding the current continuation to the waiting queue if it fails.
+                val headIdLimit = tail.id
+                val headDeqIdxLimit = tailEnqIdx
                 if (makeRendezvous) {
                     while (true) {
                         if (tryResumeContinuation(head, headDeqIdx, element)) {
@@ -134,25 +139,29 @@ class RendezvousChannelKoval<E>(
                             curCont.resume(result)
                             return@sc
                         }
-                        // Re-read and check current state
-                        head = _head
-                        headDeqIdx = head._deqIdx
-                        if (headDeqIdx == segmentSize) {
-                            adjustHead(head)
-                            continue@try_again
-                        }
-                        if (!(head.id < idLimit || (head.id == idLimit && headDeqIdx < idxLimit))) continue@try_again
-                        firstElement = readElement(head, headDeqIdx)
-                        while (firstElement == TAKEN_ELEMENT) {
-                            deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
-                            headDeqIdx++
-                            if (headDeqIdx == segmentSize || !(head.id < idLimit || (head.id == idLimit && headDeqIdx < idxLimit)))
-                                continue@try_again
+                        // Re-read the required pointers
+                        read_state@ while (true) {
+                            // Re-read head pointer and its deque index
+                            head = _head
+                            headDeqIdx = head._deqIdx
+                            if (headDeqIdx == segmentSize) {
+                                if (!adjustHead(head)) continue@try_again
+                                continue@read_state
+                            }
+                            // Check that `(head.id, headDeqIdx) < (headIdLimit, headDeqIdxLimit)`
+                            // and re-start the whole operation if needed
+                            if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) continue@try_again
+                            // Re-read the first element
                             firstElement = readElement(head, headDeqIdx)
+                            if (firstElement == TAKEN_ELEMENT) {
+                                deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                                continue@read_state
+                            }
+                            break@read_state
                         }
                     }
                 } else {
-//                    while (true) {
+                    while (true) {
                         // Try to add a new node with the current continuation and element
                         // if the tail is full, otherwise try to store it at the `tailEnqIdx` index.
                         if (tailEnqIdx == segmentSize) {
@@ -160,13 +169,13 @@ class RendezvousChannelKoval<E>(
                         } else {
                             if (storeContinuation(tail, tailEnqIdx, curCont, element)) return@sc
                         }
-                        // Re-read and check current state
+                        // Re-read the required pointers
                         head = _head
                         headDeqIdx = head._deqIdx
                         tail = _tail
                         tailEnqIdx = tail._enqIdx
-                        if (!(head.id < idLimit || (head.id == idLimit && headDeqIdx < idxLimit))) continue@try_again
-//                    }
+                        if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) continue@try_again
+                    }
                 }
             }
         }
