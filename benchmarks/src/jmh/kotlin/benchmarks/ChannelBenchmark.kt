@@ -70,13 +70,83 @@ internal interface ChannelView {
 }
 
 internal enum class ChannelViewCreator(val create: () -> ChannelView) {
-    ELIZAROV_RENDEZVOUS({ object : ChannelView {
-        val c = RendezvousChannel<Int>()
+//    ELIZAROV_RENDEZVOUS({ object : ChannelView {
+//        val c = RendezvousChannel<Int>()
+//        suspend override fun send(element: Int) = c.send(element)
+//        suspend override fun receive(): Int = c.receive()
+//    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_1({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 1)
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
     }}),
-    KOVAL_RENDEZVOUS_SPIN_300_NEW({ object : ChannelView {
-        val c = RendezvousChannelKoval<Int>(spinThreshold = 300)
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_2({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 2)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_4({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 4)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_8({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 8)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_16({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 16)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_24({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 24)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_32({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 32)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_48({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 48)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_64({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 64)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_96({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 96)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_128({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 128)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_192({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 192)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_256({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 256)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_512({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 512)
+        suspend override fun send(element: Int) = c.send(element)
+        suspend override fun receive(): Int = c.receive()
+    }}),
+    KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_1024({ object : ChannelView {
+        val c = RendezvousChannelKoval<Int>(spinThreshold = 300, segmentSize = 1024)
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
     }})
