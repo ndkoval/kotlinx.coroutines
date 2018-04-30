@@ -4,6 +4,7 @@ import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.internal.Symbol
 import kotlinx.coroutines.experimental.selects.SelectClause1
 import kotlinx.coroutines.experimental.selects.SelectClause2
+import sun.misc.Contended
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import java.util.concurrent.atomic.AtomicReferenceArray
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
@@ -59,14 +60,14 @@ class RendezvousChannelKoval<E>(
     override suspend fun send(element: E) {
         // Try to send without suspending at first,
         // invoke suspend implementation if it is not succeed.
-//        if (offer(element)) return
+        if (offer(element)) return
         sendOrReceiveSuspend<Unit>(element!!)
     }
 
     override suspend fun receive(): E {
         // Try to send without suspending at first,
         // invoke suspend implementation if it is not succeed.
-        return /*poll() ?:*/ sendOrReceiveSuspend(RECEIVER_ELEMENT)
+        return poll() ?: sendOrReceiveSuspend(RECEIVER_ELEMENT)
     }
 
     // Main function in this chanel, which implements both `#send` and `#receive` operations.
@@ -169,7 +170,8 @@ class RendezvousChannelKoval<E>(
                         } else {
                             if (storeContinuation(tail, tailEnqIdx, curCont, element)) return@sc
                         }
-                        // Re-read the required pointers
+                        // Re-read the required pointers. Read tail and its indexes at first
+                        // and only then head with its indexes.
                         tail = _tail
                         tailEnqIdx = tail._enqIdx
                         head = _head
@@ -177,6 +179,94 @@ class RendezvousChannelKoval<E>(
                         if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) continue@try_again
                     }
                 }
+            }
+        }
+    }
+
+    // Main function in this chanel, which implements both `#send` and `#receive` operations.
+    // Note that `#offer` and `#poll` functions are just simplified versions of this one.
+    private fun <T> sendOrReceive(element: Any): T? {
+        try_again@ while (true) { // CAS loop
+            // Read the tail and its enqueue index at first, then the head and its indexes.
+            // It is important to read tail and its index at first. If algorithm
+            // realizes that the same continuations (senders or receivers) are stored
+            // in the waiting queue, it can add the current continuation to the already
+            // read tail index if it is not changed. In this case, it is guaranteed that
+            // the waiting queue still has the same continuations or is empty.
+            var tail = _tail
+            var tailEnqIdx = tail._enqIdx
+            var head = _head
+            var headDeqIdx = head._deqIdx
+            val headEnqIdx = head._enqIdx
+            // If the waiting queue is empty, `headDeqIdx == headEnqIdx`.
+            // This can also happen if the `head` node is full (`headDeqIdx == segmentSize`).
+            if (headDeqIdx == headEnqIdx) {
+                if (headDeqIdx == segmentSize) {
+                    // The `head` node is full. Try to move `_head`
+                    // pointer forward and start the operation again.
+                    if (adjustHead(head)) continue@try_again
+                    // Queue is empty, return `null`
+                    return null
+                } else return null
+            } else {
+                // The waiting queue is not empty and it is guaranteed that `headDeqIdx < headEnqIdx`.
+                // Try to remove the opposite continuation (a sender for a receiver or a receiver for a sender)
+                // if waiting queue stores such in the `head` node at `headDeqIdx` index. In case the waiting
+                // queue stores the same continuations, try to add the current continuation to it.
+                //
+                // In order to determine which continuations are stored, read the element from `head` node
+                // at index `headDeqIdx`. When the algorithm add the continuation, it claims a slot at first,
+                // stores the continuation and the element after that. This way, it is not guaranteed that
+                // the first element is stored. The main idea is to spin on the value a bit and then change
+                // element value from `null` to `TAKEN_ELEMENT` and increment the deque index if it is not appeared.
+                // In this case the operation should start again. This simple  approach guarantees obstruction-freedom.
+                // TODO make it lock-free using descriptors
+                var firstElement = readElement(head, headDeqIdx)
+                if (firstElement == TAKEN_ELEMENT) {
+                    // Try to move the deque index in the `head` node
+                    deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                    continue@try_again
+                }
+                // The `firstElement` is either sender or receiver. Check if a rendezvous is possible
+                // and try to remove the first element in this case, try to add the current
+                // continuation to the waiting queue otherwise.
+                val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
+                // If removing the already read continuation fails (due to a failed CAS on moving `_deqIdx` forward)
+                // it is possible not to try do the whole operation again, but to re-read new `_head` and its `_deqIdx`
+                // values and try to remove this continuation if it is located between the already read deque
+                // and enqueue positions. In this case it is guaranteed that the queue contains the same
+                // continuation types as on making the rendezvous decision. The same optimization is possible
+                // for adding the current continuation to the waiting queue if it fails.
+                val headIdLimit = tail.id
+                val headDeqIdxLimit = tailEnqIdx
+                if (makeRendezvous) {
+                    while (true) {
+                        if (tryResumeContinuation(head, headDeqIdx, element)) {
+                            // The rendezvous is happened, congratulations!
+                            return (if (element == RECEIVER_ELEMENT) firstElement else Unit) as T
+                        }
+                        // Re-read the required pointers
+                        read_state@ while (true) {
+                            // Re-read head pointer and its deque index
+                            head = _head
+                            headDeqIdx = head._deqIdx
+                            if (headDeqIdx == segmentSize) {
+                                if (!adjustHead(head)) continue@try_again
+                                continue@read_state
+                            }
+                            // Check that `(head.id, headDeqIdx) < (headIdLimit, headDeqIdxLimit)`
+                            // and re-start the whole operation if needed
+                            if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) continue@try_again
+                            // Re-read the first element
+                            firstElement = readElement(head, headDeqIdx)
+                            if (firstElement == TAKEN_ELEMENT) {
+                                deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                                continue@read_state
+                            }
+                            break@read_state
+                        }
+                    }
+                } else return null
             }
         }
     }
@@ -296,143 +386,11 @@ class RendezvousChannelKoval<E>(
     }
 
     override fun offer(element: E): Boolean {
-        while (true) { // CAS loop
-            // Read tail and its enqueue index at first, then head and its indexes
-            val head = _head
-            val headDeqIdx = head._deqIdx
-            val headEnqIdx = head._enqIdx
-            // If the waiting queue is empty, 'headDeqIdx == headEnqIdx'.
-            // But they also could be equal if the 'head' node is full.
-            if (headDeqIdx == headEnqIdx) {
-                // Check if the node is full
-                if (headDeqIdx == segmentSize) {
-                    // 'head' node is full, try to move '_head' pointer forward and create a new node if needed
-                    val headNext = head._next
-                    if (headNext != null) {
-                        // Move '_head' forward. If CAS fails, another thread moved it.
-                        headUpdater.compareAndSet(this, head, headNext)
-                    } else {
-                        // Queue is empty, return 'false'
-                        return false
-                    }
-                } else {
-                    // Queue is empty, return 'false'
-                    return false
-                }
-            } else {
-                // Queue is not empty and 'headDeqIdx < headEnqIdx'.
-                // Try to remove the required continuation if waiting queue contains required ones,
-                // otherwise try to add the current one to the queue.
-//                var firstElement = head._data[headDeqIdx * 2]
-                // Spin wait until the element is set
-                // TODO This spin wait makes the algorithm blocking. It is technically possible
-                // TODO to change elements via CAS (null -> value) and instead of waiting here,
-                // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
-//                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
-
-                val firstElement = readElement(head, headDeqIdx)
-                if (firstElement == TAKEN_ELEMENT) {
-                    deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
-                    continue
-                }
-
-                // Check if the value is related to the required operation in order to make a rendezvous.
-                val makeRendezvous = firstElement == RECEIVER_ELEMENT
-                if (makeRendezvous) {
-                    // Try to remove the continuation from 'headDeqIdx' position
-                    if (deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)) {
-                        // Get continuation
-                        val cont = head._data[headDeqIdx * 2 + 1] as CancellableContinuation<in Any>
-                        // Clear the slot to avoid memory leaks
-                        head._data[headDeqIdx * 2 + 1] = TAKEN_CONTINUATION
-                        head._data[headDeqIdx * 2] = TAKEN_ELEMENT
-                        // Try to resume continuation
-                        val token = cont.tryResume(element!!)
-                        if (token != null) {
-                            // The continuation is going to be resumed successfully
-                            cont.completeResume(token)
-                            // Rendezvous! Return 'true'
-                            return true
-                        } else {
-                            // TODO coroutine has been cancelled, do something with that
-                        }
-                    }
-                } else {
-                   // The queue has senders, cannot be continued without suspend
-                   return false
-                }
-            }
-        }
+        return sendOrReceive<Unit>(element!!) != null
     }
 
     override fun poll(): E? {
-        while (true) { // CAS loop
-            // Read tail and its enqueue index at first, then head and its indexes
-            val head = _head
-            val headDeqIdx = head._deqIdx
-            val headEnqIdx = head._enqIdx
-            // If the waiting queue is empty, 'headDeqIdx == headEnqIdx'.
-            // But they also could be equal if the 'head' node is full.
-            if (headDeqIdx == headEnqIdx) {
-                // Check if the node is full
-                if (headDeqIdx == segmentSize) {
-                    // 'head' node is full, try to move '_head' pointer forward and create a new node if needed
-                    val headNext = head._next
-                    if (headNext != null) {
-                        // Move '_head' forward. If CAS fails, another thread moved it.
-                        headUpdater.compareAndSet(this, head, headNext)
-                    } else {
-                        // Queue is empty, return 'null'
-                        return null
-                    }
-                } else {
-                    // Queue is empty, return 'null'
-                    return null
-                }
-            } else {
-                // Queue is not empty and 'headDeqIdx < headEnqIdx'.
-                // Try to remove the required continuation if waiting queue contains required ones,
-                // otherwise try to add the current one to the queue.
-//                var firstElement = head._data[headDeqIdx * 2]
-                // Spin wait until the element is set
-                // TODO This spin wait makes the algorithm blocking. It is technically possible
-                // TODO to change elements via CAS (null -> value) and instead of waiting here,
-                // TODO make a CAS (null -> TAKEN_ELEMENT) in case null is seen.
-//                while (firstElement == null) firstElement = head._data[headDeqIdx * 2]
-                // Check if the value is related to the required operation in order to make a rendezvous.
-
-                val firstElement = readElement(head, headDeqIdx) ?: continue
-                if (firstElement == TAKEN_ELEMENT) {
-                    deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
-                    continue
-                }
-
-                val makeRendezvous = firstElement != RECEIVER_ELEMENT
-                if (makeRendezvous) {
-                    // Try to remove the continuation from 'headDeqIdx' position
-                    if (deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)) {
-                        // Get continuation
-                        val cont = head._data[headDeqIdx * 2 + 1] as CancellableContinuation<in Any>
-                        // Clear the slot to avoid memory leaks
-                        head._data[headDeqIdx * 2 + 1] = TAKEN_CONTINUATION
-                        head._data[headDeqIdx * 2] = TAKEN_ELEMENT
-                        // Try to resume continuation
-                        val token = cont.tryResume(Unit)
-                        if (token != null) {
-                            // The continuation is going to be resumed successfully
-                            cont.completeResume(token)
-                            // Rendezvous! Return removed element.
-                            return firstElement as E
-                        } else {
-                            // TODO coroutine has been cancelled, do something with that
-                        }
-                    }
-                } else {
-                    // The queue has receivers, cannot be continued without suspend
-                    return null
-                }
-            }
-        }
+       return sendOrReceive(RECEIVER_ELEMENT)
     }
 
     override fun close(cause: Throwable?): Boolean {
