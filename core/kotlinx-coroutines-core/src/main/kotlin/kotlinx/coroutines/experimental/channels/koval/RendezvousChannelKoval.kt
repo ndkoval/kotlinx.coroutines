@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 // Only implementation details are documented here.
 class RendezvousChannelKoval<E>(
         private val segmentSize: Int = 64,
-        private val spinThreshold: Int = 300
+        private val spinThreshold: Int = 300,
+        private val elemSpinThreshold: Int = 20
 ): ChannelKoval<E> {
     // Waiting queue node
     private class Node(segmentSize: Int, @JvmField val id: Int) {
@@ -210,70 +211,61 @@ class RendezvousChannelKoval<E>(
         }
     }
 
-    private class ElimState{
-        @JvmField var senderElimIndexMax = 64 + 1
-        @JvmField var receiverElimIndexMax = 64 + 1
+    @Volatile private var _senderElimSize = ELIM_SIZE_MULTIPLIER + 1
+    @Volatile private var _receiverElimSize = ELIM_SIZE_MULTIPLIER + 1
 
-        fun incSend() {
-            if (senderElimIndexMax < 33 * 64 + 1) senderElimIndexMax++
-        }
+    private val _senderElements = AtomicReferenceArray<Any>(ELIM_MAX_ARR_SIZE)
+    private val _receiverElements = AtomicReferenceArray<Any>(ELIM_MAX_ARR_SIZE)
 
-        fun deqSend() {
-            if (senderElimIndexMax > 64 + 1) senderElimIndexMax--
-        }
-
-        fun incRec() {
-            if (receiverElimIndexMax < 33 * 64 + 1) receiverElimIndexMax++
-        }
-
-        fun deqRec() {
-            if (receiverElimIndexMax > 64 + 1) receiverElimIndexMax--
-        }
-    }
-
-    private val _arrSend = AtomicReferenceArray<Any>(33)
-    private val _arrRec = AtomicReferenceArray<Any>(33)
-
-    private val _elimState = ThreadLocal.withInitial { ElimState() }
-
-    private class Box(val value: Any)
+    private class ElementBox(val value: Any)
     private class Done(val value: Any)
 
     private fun tryEliminateSender(element: Any): Boolean {
-        val elimState = _elimState.get()
-
-        val dequeIndex = ThreadLocalRandom.current().nextInt(elimState.receiverElimIndexMax) / 64 - 1
-        if (dequeIndex != -1) {
-            val x = _arrRec[dequeIndex]
-            if (x == null) elimState.deqRec()
-            if (x is Box) {
-                if (_arrRec.compareAndSet(dequeIndex, x, Done(element))) {
-                    elimState.deqRec()
-                    return true
-                } else elimState.incRec()
-            } else elimState.incRec()
+        var maxDequeIndex = _receiverElimSize
+        if (maxDequeIndex < ELIM_MIN_SIZE) maxDequeIndex = ELIM_MIN_SIZE
+        if (maxDequeIndex > ELIM_MAX_SIZE) maxDequeIndex = ELIM_MAX_SIZE
+        deque@ while (true) {
+            val dequeIndex = ThreadLocalRandom.current().nextInt(maxDequeIndex) / ELIM_SIZE_MULTIPLIER - 1
+            if (dequeIndex != -1) {
+                val x = _receiverElements[dequeIndex]
+                when (x) {
+                    null -> { _receiverElimSize--; break@deque }
+                    ELIM_RECEIVER_ELEMENT -> {
+                        if (_receiverElements.compareAndSet(dequeIndex, x, Done(element))) {
+                            return true
+                        } else { _receiverElimSize++; continue@deque }
+                    }
+                    else -> { _receiverElimSize++; continue@deque }
+                }
+            } else break@deque
         }
 
-        val enqueIndex = ThreadLocalRandom.current().nextInt(elimState.senderElimIndexMax) / 64 - 1
-        if (enqueIndex != -1) {
-            val x = _arrSend[enqueIndex]
-            if (x == null) {
-                val box = Box(element)
-                if (_arrSend.compareAndSet(enqueIndex, null, box)) {
-                    elimState.deqSend()
-                    for (t in 1 .. 10) {
-                        val new = _arrSend.get(enqueIndex)
-                        if (new is Done) {
-                            _arrSend[enqueIndex] = null
+        var maxEnqueIndex = _senderElimSize
+        if (maxEnqueIndex < ELIM_MIN_SIZE) maxEnqueIndex = ELIM_MIN_SIZE
+        if (maxEnqueIndex > ELIM_MAX_SIZE) maxEnqueIndex = ELIM_MAX_SIZE
+        enque@ while (true) {
+            val enqueIndex = ThreadLocalRandom.current().nextInt(maxEnqueIndex) / ELIM_SIZE_MULTIPLIER - 1
+            if (enqueIndex != -1) {
+                val x = _senderElements[enqueIndex]
+                if (x == null) {
+                    val box = ElementBox(element)
+                    if (_senderElements.compareAndSet(enqueIndex, null, box)) {
+                        _senderElimSize--
+                        for (t in 1..elemSpinThreshold) {
+                            val new = _senderElements.get(enqueIndex)
+                            if (new == ELIM_SENDER_DONE) {
+                                _senderElements[enqueIndex] = null
+                                return true
+                            }
+                        }
+                        if (!_senderElements.compareAndSet(enqueIndex, box, null)) {
+                            _senderElements[enqueIndex] = null
                             return true
                         }
-                    }
-                    if (!_arrSend.compareAndSet(enqueIndex, box, null)) {
-                         _arrSend[enqueIndex] = null
-                        return true
-                    }
-                } else elimState.incSend()
-            } else elimState.incSend()
+                        break@enque
+                    } else { _senderElimSize++; continue@enque }
+                } else { _senderElimSize++; break@enque }
+            } else break@enque
         }
 
         return false
@@ -281,41 +273,52 @@ class RendezvousChannelKoval<E>(
 
 
     private fun tryEliminateReceiver(): Any? {
-        val elimState = _elimState.get()
-
-        val dequeIndex = ThreadLocalRandom.current().nextInt(elimState.senderElimIndexMax) / 64 - 1
-        if (dequeIndex != -1) {
-            val x = _arrSend[dequeIndex]
-            if (x == null) elimState.deqSend()
-            if (x is Box) {
-                if (_arrSend.compareAndSet(dequeIndex, x, Done(RECEIVER_ELEMENT))) {
-                    elimState.deqSend()
-                    return x.value
-                } else elimState.incSend()
-            } else elimState.incSend()
+        var maxDequeIndex = _senderElimSize
+        if (maxDequeIndex < ELIM_MIN_SIZE) maxDequeIndex = ELIM_MIN_SIZE
+        if (maxDequeIndex > ELIM_MAX_SIZE) maxDequeIndex = ELIM_MAX_SIZE
+        deque@ while (true) {
+            val dequeIndex = ThreadLocalRandom.current().nextInt(maxDequeIndex) / ELIM_SIZE_MULTIPLIER - 1
+            if (dequeIndex != -1) {
+                val x = _senderElements[dequeIndex]
+                when (x) {
+                    null -> { _senderElimSize--; break@deque }
+                    is ElementBox -> {
+                        if (_senderElements.compareAndSet(dequeIndex, x, ELIM_SENDER_DONE)) {
+                            return x.value
+                        } else { _senderElimSize++; continue@deque }
+                    }
+                    else -> { _senderElimSize++; continue@deque }
+                }
+            } else break@deque
         }
 
-        val enqueIndex = ThreadLocalRandom.current().nextInt(elimState.receiverElimIndexMax) / 64 - 1
-        if (enqueIndex != -1) {
-            val x = _arrRec[enqueIndex]
-            if (x == null) {
-                val box = Box(RECEIVER_ELEMENT)
-                if (_arrRec.compareAndSet(enqueIndex, null, box)) {
-                    elimState.deqRec()
-                    for (t in 1 .. 10) {
-                        val new = _arrRec.get(enqueIndex)
-                        if (new is Done) {
-                            _arrRec[enqueIndex] = null
-                            return new.value
+        var maxEnqueIndex = _receiverElimSize
+        if (maxEnqueIndex < ELIM_MIN_SIZE) maxEnqueIndex = ELIM_MIN_SIZE
+        if (maxEnqueIndex > ELIM_MAX_SIZE) maxEnqueIndex = ELIM_MAX_SIZE
+        enque@ while (true) {
+            val enqueIndex = ThreadLocalRandom.current().nextInt(maxEnqueIndex) / ELIM_SIZE_MULTIPLIER - 1
+            if (enqueIndex != -1) {
+                val x = _receiverElements[enqueIndex]
+                if (x == null) {
+                    val box = ELIM_RECEIVER_ELEMENT
+                    if (_receiverElements.compareAndSet(enqueIndex, null, box)) {
+                        _receiverElimSize--
+                        for (t in 1..elemSpinThreshold) {
+                            val new = _receiverElements.get(enqueIndex)
+                            if (new is Done) {
+                                _receiverElements[enqueIndex] = null
+                                return new.value
+                            }
                         }
-                    }
-                    if (!_arrRec.compareAndSet(enqueIndex, box, null)) {
-                        val done = _arrRec[enqueIndex] as Done
-                        _arrRec[enqueIndex] = null
-                        return done.value
-                    }
-                } else elimState.incRec()
-            } else elimState.incRec()
+                        if (!_receiverElements.compareAndSet(enqueIndex, box, null)) {
+                            val res = (_receiverElements[enqueIndex] as Done).value
+                            _receiverElements[enqueIndex] = null
+                            return res
+                        }
+                        break@enque
+                    } else { _receiverElimSize++; continue@enque }
+                } else { _receiverElimSize++; break@enque }
+            } else break@enque
         }
 
         return null
@@ -548,6 +551,13 @@ class RendezvousChannelKoval<E>(
 
 
     private companion object {
+        const val ELIM_SIZE_MULTIPLIER = 1024
+        @JvmField val ELIM_MAX_ARR_SIZE = Runtime.getRuntime().availableProcessors()
+        @JvmField val ELIM_MIN_SIZE = ELIM_SIZE_MULTIPLIER + 1
+        @JvmField val ELIM_MAX_SIZE = (ELIM_MAX_ARR_SIZE + 1) * ELIM_SIZE_MULTIPLIER
+        @JvmField val ELIM_SENDER_DONE = Symbol("SENDER_DONE")
+        @JvmField val ELIM_RECEIVER_ELEMENT = Symbol("RECEIVER_ELEMENT")
+
         @JvmField val UNSAFE = UtilUnsafe.unsafe
         @JvmField val base = UNSAFE.arrayBaseOffset(Array<Any>::class.java)
         @JvmField val shift = 31 - Integer.numberOfLeadingZeros(UNSAFE.arrayIndexScale(Array<Any>::class.java))
