@@ -4,15 +4,20 @@ import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.internal.Symbol
 import kotlinx.coroutines.experimental.selects.SelectClause1
 import kotlinx.coroutines.experimental.selects.SelectClause2
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
+import java.util.concurrent.atomic.AtomicReferenceArray
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
 // See the original [RendezvousChannel] class for the contract details.
 // Only implementation details are documented here.
 class RendezvousChannelKoval<E>(
-        private val segmentSize: Int = 32,
-        private val spinThreshold: Int = 300
+        private val segmentSize: Int = 64,
+        private val spinThreshold: Int = 300,
+        private val elimAttempts: Int = 4,
+        private val elimArrSize: Int = 4,
+        private val elimSpinThreshold: Int = 100
 ): ChannelKoval<E> {
     // Waiting queue node
     private class Node(segmentSize: Int, @JvmField val id: Int) {
@@ -208,8 +213,44 @@ class RendezvousChannelKoval<E>(
         }
     }
 
+    private val _eliminationArray = AtomicReferenceArray<Any>(elimArrSize)
+
+    private class Box(val value: Any)
+    private class Done(val value: Any)
+
     // This method is based on `#sendOrReceiveSuspend`. Returns `null` if fails.
     private fun <T> sendOrReceiveNonSuspend(element: Any): T? {
+        for (t in 1 .. elimAttempts) {
+            val index = ThreadLocalRandom.current().nextInt(elimArrSize)
+            val cur = _eliminationArray[index]
+            when (cur) {
+                null -> {
+                    val box = Box(element)
+                    if (_eliminationArray.compareAndSet(index, null, box)) {
+                        for (t2 in 1 ..elimSpinThreshold) {
+                            val new = _eliminationArray[index]
+                            if (new is Done) {
+                                val result = new.value
+                                _eliminationArray[index] = null
+                                return result as T
+                            }
+                        }
+                        if (!_eliminationArray.compareAndSet(index, box, null)) {
+                            // Done here
+                            val done = _eliminationArray[index] as Done
+                            _eliminationArray[index] = null
+                            return done.value as T
+                        }
+                    }
+                }
+                is Box -> {
+                    val makeRendezvous = if (element == RECEIVER_ELEMENT) cur.value != RECEIVER_ELEMENT else cur.value == RECEIVER_ELEMENT
+                    if (makeRendezvous) {
+                        if (_eliminationArray.compareAndSet(index, cur, Done(element))) return cur.value as T
+                    }
+                }
+            }
+        }
         try_again@ while (true) { // CAS loop
             // Read the tail and its enqueue index at first, then the head and its indexes.
             val tail = _tail
@@ -433,7 +474,7 @@ class RendezvousChannelKoval<E>(
         @JvmField val base = UNSAFE.arrayBaseOffset(Array<Any>::class.java)
         @JvmField val shift = 31 - Integer.numberOfLeadingZeros(UNSAFE.arrayIndexScale(Array<Any>::class.java))
 
-        inline fun byteOffset(i: Int) = (i.toLong() shl shift) + base
+        @JvmStatic inline fun byteOffset(i: Int) = (i.toLong() shl shift) + base
 
         const val CANCELLATION_THRESHOLD = 0.75f
 
