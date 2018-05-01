@@ -250,7 +250,7 @@ class RendezvousChannelKoval<E>(
                 if (x == null) {
                     val box = ElementBox(element)
                     if (_senderElements.compareAndSet(enqueIndex, null, box)) {
-                        _senderElimSize--
+//                        _senderElimSize--
                         for (t in 1..elemSpinThreshold) {
                             val new = _senderElements.get(enqueIndex)
                             if (new == ELIM_SENDER_DONE) {
@@ -302,7 +302,7 @@ class RendezvousChannelKoval<E>(
                 if (x == null) {
                     val box = ELIM_RECEIVER_ELEMENT
                     if (_receiverElements.compareAndSet(enqueIndex, null, box)) {
-                        _receiverElimSize--
+//                        _receiverElimSize--
                         for (t in 1..elemSpinThreshold) {
                             val new = _receiverElements.get(enqueIndex)
                             if (new is Done) {
