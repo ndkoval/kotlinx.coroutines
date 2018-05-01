@@ -14,10 +14,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 // Only implementation details are documented here.
 class RendezvousChannelKoval<E>(
         private val segmentSize: Int = 64,
-        private val spinThreshold: Int = 300,
-        private val elimAttempts: Int = 4,
-        private val elimArrSize: Int = 4,
-        private val elimSpinThreshold: Int = 100
+        private val spinThreshold: Int = 300
 ): ChannelKoval<E> {
     // Waiting queue node
     private class Node(segmentSize: Int, @JvmField val id: Int) {
@@ -213,43 +210,124 @@ class RendezvousChannelKoval<E>(
         }
     }
 
-    private val _eliminationArray = AtomicReferenceArray<Any>(elimArrSize)
+    private class ElimState{
+        @JvmField var senderElimIndexMax = 64 + 1
+        @JvmField var receiverElimIndexMax = 64 + 1
+
+        fun incSend() {
+            if (senderElimIndexMax < 33 * 64 + 1) senderElimIndexMax++
+        }
+
+        fun deqSend() {
+            if (senderElimIndexMax > 64 + 1) senderElimIndexMax--
+        }
+
+        fun incRec() {
+            if (receiverElimIndexMax < 33 * 64 + 1) receiverElimIndexMax++
+        }
+
+        fun deqRec() {
+            if (receiverElimIndexMax > 64 + 1) receiverElimIndexMax--
+        }
+    }
+
+    private val _arrSend = AtomicReferenceArray<Any>(33)
+    private val _arrRec = AtomicReferenceArray<Any>(33)
+
+    private val _elimState = ThreadLocal.withInitial { ElimState() }
 
     private class Box(val value: Any)
     private class Done(val value: Any)
 
+    private fun tryEliminateSender(element: Any): Boolean {
+        val elimState = _elimState.get()
+
+        val dequeIndex = ThreadLocalRandom.current().nextInt(elimState.receiverElimIndexMax) / 64 - 1
+        if (dequeIndex != -1) {
+            val x = _arrRec[dequeIndex]
+            if (x == null) elimState.deqRec()
+            if (x is Box) {
+                if (_arrRec.compareAndSet(dequeIndex, x, Done(element))) {
+                    elimState.deqRec()
+                    return true
+                } else elimState.incRec()
+            } else elimState.incRec()
+        }
+
+        val enqueIndex = ThreadLocalRandom.current().nextInt(elimState.senderElimIndexMax) / 64 - 1
+        if (enqueIndex != -1) {
+            val x = _arrSend[enqueIndex]
+            if (x == null) {
+                val box = Box(element)
+                if (_arrSend.compareAndSet(enqueIndex, null, box)) {
+                    elimState.deqSend()
+                    for (t in 1 .. 10) {
+                        val new = _arrSend.get(enqueIndex)
+                        if (new is Done) {
+                            _arrSend[enqueIndex] = null
+                            return true
+                        }
+                    }
+                    if (!_arrSend.compareAndSet(enqueIndex, box, null)) {
+                         _arrSend[enqueIndex] = null
+                        return true
+                    }
+                } else elimState.incSend()
+            } else elimState.incSend()
+        }
+
+        return false
+    }
+
+
+    private fun tryEliminateReceiver(): Any? {
+        val elimState = _elimState.get()
+
+        val dequeIndex = ThreadLocalRandom.current().nextInt(elimState.senderElimIndexMax) / 64 - 1
+        if (dequeIndex != -1) {
+            val x = _arrSend[dequeIndex]
+            if (x == null) elimState.deqSend()
+            if (x is Box) {
+                if (_arrSend.compareAndSet(dequeIndex, x, Done(RECEIVER_ELEMENT))) {
+                    elimState.deqSend()
+                    return x.value
+                } else elimState.incSend()
+            } else elimState.incSend()
+        }
+
+        val enqueIndex = ThreadLocalRandom.current().nextInt(elimState.receiverElimIndexMax) / 64 - 1
+        if (enqueIndex != -1) {
+            val x = _arrRec[enqueIndex]
+            if (x == null) {
+                val box = Box(RECEIVER_ELEMENT)
+                if (_arrRec.compareAndSet(enqueIndex, null, box)) {
+                    elimState.deqRec()
+                    for (t in 1 .. 10) {
+                        val new = _arrRec.get(enqueIndex)
+                        if (new is Done) {
+                            _arrRec[enqueIndex] = null
+                            return new.value
+                        }
+                    }
+                    if (!_arrRec.compareAndSet(enqueIndex, box, null)) {
+                        val done = _arrRec[enqueIndex] as Done
+                        _arrRec[enqueIndex] = null
+                        return done.value
+                    }
+                } else elimState.incRec()
+            } else elimState.incRec()
+        }
+
+        return null
+    }
+
     // This method is based on `#sendOrReceiveSuspend`. Returns `null` if fails.
     private fun <T> sendOrReceiveNonSuspend(element: Any): T? {
-        for (t in 1 .. elimAttempts) {
-            val index = ThreadLocalRandom.current().nextInt(elimArrSize)
-            val cur = _eliminationArray[index]
-            when (cur) {
-                null -> {
-                    val box = Box(element)
-                    if (_eliminationArray.compareAndSet(index, null, box)) {
-                        for (t2 in 1 ..elimSpinThreshold) {
-                            val new = _eliminationArray[index]
-                            if (new is Done) {
-                                val result = new.value
-                                _eliminationArray[index] = null
-                                return result as T
-                            }
-                        }
-                        if (!_eliminationArray.compareAndSet(index, box, null)) {
-                            // Done here
-                            val done = _eliminationArray[index] as Done
-                            _eliminationArray[index] = null
-                            return done.value as T
-                        }
-                    }
-                }
-                is Box -> {
-                    val makeRendezvous = if (element == RECEIVER_ELEMENT) cur.value != RECEIVER_ELEMENT else cur.value == RECEIVER_ELEMENT
-                    if (makeRendezvous) {
-                        if (_eliminationArray.compareAndSet(index, cur, Done(element))) return cur.value as T
-                    }
-                }
-            }
+        if (element == RECEIVER_ELEMENT) {
+            val res = tryEliminateReceiver()
+            if (res != null) return res as T
+        } else {
+            if (tryEliminateSender(element)) return Unit as T
         }
         try_again@ while (true) { // CAS loop
             // Read the tail and its enqueue index at first, then the head and its indexes.
