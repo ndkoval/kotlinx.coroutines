@@ -360,9 +360,9 @@ class RendezvousChannelKoval<E>(
                                 }
                             }
                             if (!_elimReceiverArray.compareAndSet(i, ELIM_RECEIVER_ELEMENT, null)) {
-                                // _elimSenderArray[i] == ELIM_SENDER_DONE
+                                val done = _elimReceiverArray[i] as Done
                                 _elimReceiverArray[i] = null
-                                return true
+                                return done.value
                             }
                             break@attempt
                         } else { incElimSenderArraySize(1); continue@attempt }
