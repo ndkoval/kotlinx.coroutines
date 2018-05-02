@@ -11,8 +11,8 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
 
     abstract class Node(@JvmField @Volatile var _next: Node? = null)
 
-    class SenderNode(@JvmField val cont: CancellableContinuation<Unit>, @JvmField val element: Any) : Node()
-    class ReceiverNode(@JvmField val cont: CancellableContinuation<*>) : Node()
+    class SenderNode(@JvmField var cont: CancellableContinuation<Unit>?, @JvmField var element: Any?) : Node()
+    class ReceiverNode(@JvmField var cont: CancellableContinuation<*>?) : Node()
 
     @Volatile
     private var _head: Node
@@ -38,33 +38,40 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
         while (true) {
             val tail = _tail
             val head = _head
-            val headNext = head._next
-            if (headNext is SenderNode) {
-                // Queue contains senders, try to remove the first one
-                if (headUpdater.compareAndSet(this, head, headNext)) {
-                    val cont = headNext.cont
-                    val token = cont.tryResume(Unit)
-                    if (token != null) {
-                        cont.completeResume(token)
-                        curCont.resume(headNext.element as E)
-                        return@sc
+            if (head == tail || tail is ReceiverNode) {
+                // Queue is empty or contains senders,
+                // try to add the current continuation to the queue
+                val tailNext = tail._next
+                if (tail == _tail) {
+                    if (tailNext != null) {
+                        tailUpdater.compareAndSet(this, tail, tailNext)
                     } else {
-                        // TODO cancellation
+                        val node = ReceiverNode(curCont)
+                        if (nextUpdater.compareAndSet(tail, null, node)) {
+                            tailUpdater.compareAndSet(this, tail, node)
+                            curCont.initCancellability()
+                            curCont.invokeOnCompletion { /* TODO cancellation */ }
+                            return@sc
+                        }
                     }
                 }
             } else {
-                // Queue is empty or contains receivers,
-                // try to add the current continuation to the queue
-                val tailNext = tail._next
-                if (tailNext != null) {
-                    tailUpdater.compareAndSet(this, tail, tailNext)
-                } else {
-                    val node = ReceiverNode(curCont)
-                    if (nextUpdater.compareAndSet(tail, null, node)) {
-                        tailUpdater.compareAndSet(this, tail, node)
-                        curCont.initCancellability()
-                        curCont.invokeOnCompletion { /* TODO cancellation */ }
+                // Queue contains receivers, try to remove it
+                val headNext = head._next
+                if (tail != _tail || head != _head || headNext == null) continue
+                headNext as SenderNode
+                if (headUpdater.compareAndSet(this, head, headNext)) {
+                    val cont = headNext.cont!!
+                    val res = headNext.element as E
+                    headNext.cont = null
+                    headNext.element = null
+                    val token = cont.tryResume(Unit)
+                    if (token != null) {
+                        cont.completeResume(token)
+                        curCont.resume(res)
                         return@sc
+                    } else {
+                        // TODO cancellation
                     }
                 }
             }
@@ -74,13 +81,32 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
     private suspend fun sendSuspend(element: E) = suspendAtomicCancellableCoroutine<Unit>(holdCancellability = true) sc@ { curCont ->
         while (true) {
             val tail = _tail
-            val tailNext = tail._next
             val head = _head
-            val headNext = head._next
-            if (headNext is ReceiverNode) {
+            if (head == tail || tail is SenderNode) {
+                // Queue is empty or contains senders,
+                // try to add the current continuation to the queue
+                val tailNext = tail._next
+                if (tail == _tail) {
+                    if (tailNext != null) {
+                        tailUpdater.compareAndSet(this, tail, tailNext)
+                    } else {
+                        val node = SenderNode(curCont, element!!)
+                        if (nextUpdater.compareAndSet(tail, null, node)) {
+                            tailUpdater.compareAndSet(this, tail, node)
+                            curCont.initCancellability()
+                            curCont.invokeOnCompletion { /* TODO cancellation */ }
+                            return@sc
+                        }
+                    }
+                }
+            } else {
                 // Queue contains receivers, try to remove it
+                val headNext = head._next
+                if (tail != _tail || head != _head || headNext == null) continue
+                headNext as ReceiverNode
                 if (headUpdater.compareAndSet(this, head, headNext)) {
                     val cont = headNext.cont as CancellableContinuation<E>
+                    headNext.cont = null
                     val token = cont.tryResume(element)
                     if (token != null) {
                         cont.completeResume(token)
@@ -88,20 +114,6 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
                         return@sc
                     } else {
                         // TODO cancellation
-                    }
-                }
-            } else {
-                // Queue is empty or contains senders,
-                // try to add the current continuation to the queue
-                if (tailNext != null) {
-                    tailUpdater.compareAndSet(this, tail, tailNext)
-                } else {
-                    val node = SenderNode(curCont, element!!)
-                    if (nextUpdater.compareAndSet(tail, null, node)) {
-                        tailUpdater.compareAndSet(this, tail, node)
-                        curCont.initCancellability()
-                        curCont.invokeOnCompletion { /* TODO cancellation */ }
-                        return@sc
                     }
                 }
             }
@@ -135,7 +147,7 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
             if (headNext is SenderNode) {
                 // Queue contains senders, try to remove the first one
                 if (headUpdater.compareAndSet(this, head, headNext)) {
-                    val cont = headNext.cont
+                    val cont = headNext.cont!!
                     val token = cont.tryResume(Unit)
                     if (token != null) {
                         cont.completeResume(token)
