@@ -35,6 +35,7 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
     }
 
     private suspend fun receiveSuspend() = suspendAtomicCancellableCoroutine<E>(holdCancellability = true) sc@ { curCont ->
+        val node = ReceiverNode(curCont)
         while (true) {
             val tail = _tail
             val head = _head
@@ -46,7 +47,6 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
                     if (tailNext != null) {
                         tailUpdater.compareAndSet(this, tail, tailNext)
                     } else {
-                        val node = ReceiverNode(curCont)
                         if (nextUpdater.compareAndSet(tail, null, node)) {
                             tailUpdater.compareAndSet(this, tail, node)
                             curCont.initCancellability()
@@ -79,6 +79,7 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
     }
 
     private suspend fun sendSuspend(element: E) = suspendAtomicCancellableCoroutine<Unit>(holdCancellability = true) sc@ { curCont ->
+        val node = SenderNode(curCont, element!!)
         while (true) {
             val tail = _tail
             val head = _head
@@ -90,7 +91,6 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
                     if (tailNext != null) {
                         tailUpdater.compareAndSet(this, tail, tailNext)
                     } else {
-                        val node = SenderNode(curCont, element!!)
                         if (nextUpdater.compareAndSet(tail, null, node)) {
                             tailUpdater.compareAndSet(this, tail, node)
                             curCont.initCancellability()
@@ -128,6 +128,7 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
                 // Queue contains receivers, try to remove it
                 if (headUpdater.compareAndSet(this, head, headNext)) {
                     val cont = headNext.cont as CancellableContinuation<E>
+                    headNext.cont = null
                     val token = cont.tryResume(element)
                     if (token != null) {
                         cont.completeResume(token)
@@ -148,10 +149,13 @@ class RendezvousChannelKovalMSQueue<E> : ChannelKoval<E> {
                 // Queue contains senders, try to remove the first one
                 if (headUpdater.compareAndSet(this, head, headNext)) {
                     val cont = headNext.cont!!
+                    val res = headNext.element as E
+                    headNext.cont = null
+                    headNext.element = null
                     val token = cont.tryResume(Unit)
                     if (token != null) {
                         cont.completeResume(token)
-                        return headNext.element as E
+                        return res
                     } else {
                         // TODO cancellation
                     }
