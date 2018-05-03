@@ -273,7 +273,7 @@ class RendezvousChannelKoval<E>(
     private fun tryEliminateSender(element: Any): Unit? {
         val elimReceiverArraySize = _elimReceiverArraySize
         if (elimReceiverArraySize > 0) {
-            _elimsTotal++
+//            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimReceiverArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimReceiverArraySize - 1)) {
                 val x = _elimReceiverArray[i]
@@ -281,7 +281,7 @@ class RendezvousChannelKoval<E>(
                     null -> { continue@attempt }
                     ELIM_RECEIVER_ELEMENT -> {
                         if (_elimReceiverArray.compareAndSet(i, x, Done(element))) {
-                            _elimsSucc++
+//                            _elimsSucc++
                             return Unit
                         } else incElimReceiverArraySize(1)
                     }
@@ -293,7 +293,7 @@ class RendezvousChannelKoval<E>(
 
         val elimSenderArraySize = _elimSenderArraySize
         if (elimSenderArraySize > 0) {
-            _elimsTotal++
+//            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimSenderArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimSenderArraySize - 1)) {
                 val x = _elimSenderArray[i]
@@ -306,7 +306,7 @@ class RendezvousChannelKoval<E>(
                                 val probablyDone = _elimSenderArray[i]
                                 if (probablyDone == ELIM_SENDER_DONE) {
                                     _elimSenderArray[i] = null
-                                    _elimsSucc++
+//                                    _elimsSucc++
                                     return Unit
                                 }
                             }
@@ -314,7 +314,7 @@ class RendezvousChannelKoval<E>(
                                 // _elimSenderArray[i] == ELIM_SENDER_DONE
                                 incElimSenderArraySize(1)
                                 _elimSenderArray[i] = null
-                                _elimsSucc++
+//                                _elimsSucc++
                                 return Unit
                             }
                         } else incElimSenderArraySize(1)
@@ -330,7 +330,7 @@ class RendezvousChannelKoval<E>(
     private fun tryEliminateReceiver(): Any? {
         val elimSenderArraySize = _elimSenderArraySize
         if (elimSenderArraySize > 0) {
-            _elimsTotal++
+//            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimSenderArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimSenderArraySize - 1)) {
                 val x = _elimSenderArray[i]
@@ -338,7 +338,7 @@ class RendezvousChannelKoval<E>(
                     null -> continue@attempt
                     is ElementBox -> {
                         if (_elimSenderArray.compareAndSet(i, x, ELIM_SENDER_DONE)) {
-                            _elimsSucc++
+//                            _elimsSucc++
                             return x.value
                         } else incElimSenderArraySize(1)
                     }
@@ -350,7 +350,7 @@ class RendezvousChannelKoval<E>(
 
         val elimReceiverArraySize = _elimReceiverArraySize
         if (elimReceiverArraySize > 0) {
-            _elimsTotal++
+//            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimReceiverArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimReceiverArraySize - 1)) {
                 val x = _elimReceiverArray[i]
@@ -362,7 +362,7 @@ class RendezvousChannelKoval<E>(
                                 if (probablyDone is Done) {
                                     val res = probablyDone.value
                                     _elimReceiverArray[i] = null
-                                    _elimsSucc++
+//                                    _elimsSucc++
                                     return res
                                 }
                             }
@@ -370,7 +370,7 @@ class RendezvousChannelKoval<E>(
                                 val done = _elimReceiverArray[i] as Done
                                 _elimReceiverArray[i] = null
                                 incElimReceiverArraySize(1)
-                                _elimsSucc++
+//                                _elimsSucc++
                                 return done.value
                             }
                         }
