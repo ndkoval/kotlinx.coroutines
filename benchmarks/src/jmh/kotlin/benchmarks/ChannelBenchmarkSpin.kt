@@ -26,9 +26,9 @@ open class ChannelBenchmarkSpin {
         val threads = (1 .. threads).map { id ->
             thread {
                 if (id % 2 == 0) {
-                    repeat(localWork) { ch.sendSpin(id) }
+                    repeat(localWork) { Blackhole.consumeCPU(10); ch.sendSpin(id) }
                 } else {
-                    repeat(localWork) { ch.receiveSpin() }
+                    repeat(localWork) { blackhole.consume(ch.receiveSpin()); Blackhole.consumeCPU(10); }
                 }
             }
         }
