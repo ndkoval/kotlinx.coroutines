@@ -105,6 +105,7 @@ class RendezvousChannelKoval<E>(
     // Main function in this chanel, which implements both `#send` and `#receive` operations.
     // Note that `#offer` and `#poll` functions are just simplified versions of this one.
     private suspend fun <T> sendOrReceiveSuspend(element: Any) = suspendAtomicCancellableCoroutine<T>(holdCancellability = true) sc@ { curCont ->
+        var localCounterUpdate = 0
         try_again@ while (true) { // CAS loop
             // Read the tail and its enqueue index at first, then the head and its indexes.
             // It is important to read tail and its index at first. If algorithm
@@ -128,14 +129,16 @@ class RendezvousChannelKoval<E>(
                     }
                     // Queue is empty, try to add a new node with the current continuation.
                     if (addNewNode(head, curCont, element)) {
+                        if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                         return@sc
-                    } else { incElimReceiverArraySize(1); incElimSenderArraySize(1) }
+                    } else { localCounterUpdate++ }
                 } else {
                     // The `head` node is not full, therefore the waiting queue
                     // is empty. Try to add the current continuation to the queue.
                     if (storeContinuation(head, headEnqIdx, curCont, element)) {
+                        if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                         return@sc
-                    } else { incElimReceiverArraySize(1); incElimSenderArraySize(1) }
+                    } else { localCounterUpdate++ }
                 }
             } else {
                 // The waiting queue is not empty and it is guaranteed that `headDeqIdx < headEnqIdx`.
@@ -153,7 +156,7 @@ class RendezvousChannelKoval<E>(
                 var firstElement = readElement(head, headDeqIdx)
                 if (firstElement == TAKEN_ELEMENT) {
                     // Try to move the deque index in the `head` node
-                    incElimReceiverArraySize(1); incElimSenderArraySize(1)
+                    localCounterUpdate++
                     deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
                     continue@try_again
                 }
@@ -176,6 +179,7 @@ class RendezvousChannelKoval<E>(
                             // Resume the current continuation
                             val result = (if (element == RECEIVER_ELEMENT) firstElement else Unit) as T
                             curCont.resume(result)
+                            if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                             return@sc
                         }
                         // Re-read the required pointers
@@ -190,7 +194,7 @@ class RendezvousChannelKoval<E>(
                             // Check that `(head.id, headDeqIdx) < (headIdLimit, headDeqIdxLimit)`
                             // and re-start the whole operation if needed
                             if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) {
-                                incElimReceiverArraySize(1); incElimSenderArraySize(1)
+                                localCounterUpdate++
                                 continue@try_again
                             }
                             // Re-read the first element
@@ -208,12 +212,12 @@ class RendezvousChannelKoval<E>(
                         // if the tail is full, otherwise try to store it at the `tailEnqIdx` index.
                         if (tailEnqIdx == segmentSize) {
                             if (addNewNode(tail, curCont, element)) {
-                                decOppositeElimArraySize(element, 1)
+                                if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                                 return@sc
                             }
                         } else {
                             if (storeContinuation(tail, tailEnqIdx, curCont, element)) {
-                                decOppositeElimArraySize(element, 1)
+                                if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                                 return@sc
                             }
                         }
@@ -224,7 +228,7 @@ class RendezvousChannelKoval<E>(
                         head = _head
                         headDeqIdx = head._deqIdx
                         if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) {
-                            incElimReceiverArraySize(1); incElimSenderArraySize(1)
+                            localCounterUpdate++
                             continue@try_again
                         }
                     }
@@ -273,7 +277,7 @@ class RendezvousChannelKoval<E>(
     private fun tryEliminateSender(element: Any): Unit? {
         val elimReceiverArraySize = _elimReceiverArraySize
         if (elimReceiverArraySize > 0) {
-//            _elimsTotal++
+            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimReceiverArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimReceiverArraySize - 1)) {
                 val x = _elimReceiverArray[i]
@@ -281,10 +285,11 @@ class RendezvousChannelKoval<E>(
                     null -> { continue@attempt }
                     ELIM_RECEIVER_ELEMENT -> {
                         if (_elimReceiverArray.compareAndSet(i, x, Done(element))) {
-//                            _elimsSucc++
+                            _elimsSucc++
                             return Unit
                         } else incElimReceiverArraySize(1)
                     }
+                    else -> incElimReceiverArraySize(1)
                 }
             }
             // Elimination was unsuccessful :(
@@ -293,7 +298,7 @@ class RendezvousChannelKoval<E>(
 
         val elimSenderArraySize = _elimSenderArraySize
         if (elimSenderArraySize > 0) {
-//            _elimsTotal++
+            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimSenderArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimSenderArraySize - 1)) {
                 val x = _elimSenderArray[i]
@@ -306,7 +311,7 @@ class RendezvousChannelKoval<E>(
                                 val probablyDone = _elimSenderArray[i]
                                 if (probablyDone == ELIM_SENDER_DONE) {
                                     _elimSenderArray[i] = null
-//                                    _elimsSucc++
+                                    _elimsSucc++
                                     return Unit
                                 }
                             }
@@ -314,11 +319,12 @@ class RendezvousChannelKoval<E>(
                                 // _elimSenderArray[i] == ELIM_SENDER_DONE
                                 incElimSenderArraySize(1)
                                 _elimSenderArray[i] = null
-//                                _elimsSucc++
+                                _elimsSucc++
                                 return Unit
                             }
                         } else incElimSenderArraySize(1)
                     }
+                    else -> incElimSenderArraySize(1)
                 }
             }
             decElimSenderArraySize(1)
@@ -330,7 +336,7 @@ class RendezvousChannelKoval<E>(
     private fun tryEliminateReceiver(): Any? {
         val elimSenderArraySize = _elimSenderArraySize
         if (elimSenderArraySize > 0) {
-//            _elimsTotal++
+            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimSenderArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimSenderArraySize - 1)) {
                 val x = _elimSenderArray[i]
@@ -338,10 +344,11 @@ class RendezvousChannelKoval<E>(
                     null -> continue@attempt
                     is ElementBox -> {
                         if (_elimSenderArray.compareAndSet(i, x, ELIM_SENDER_DONE)) {
-//                            _elimsSucc++
+                            _elimsSucc++
                             return x.value
                         } else incElimSenderArraySize(1)
                     }
+                    else -> incElimSenderArraySize(1)
                 }
             }
             // Elimination was unsuccessful :(
@@ -350,7 +357,7 @@ class RendezvousChannelKoval<E>(
 
         val elimReceiverArraySize = _elimReceiverArraySize
         if (elimReceiverArraySize > 0) {
-//            _elimsTotal++
+            _elimsTotal++
             val position = ThreadLocalRandom.current().nextInt(elimReceiverArraySize)
             attempt@ for (i in max(0, position - 1) .. min(position + 1, elimReceiverArraySize - 1)) {
                 val x = _elimReceiverArray[i]
@@ -362,7 +369,7 @@ class RendezvousChannelKoval<E>(
                                 if (probablyDone is Done) {
                                     val res = probablyDone.value
                                     _elimReceiverArray[i] = null
-//                                    _elimsSucc++
+                                    _elimsSucc++
                                     return res
                                 }
                             }
@@ -370,11 +377,12 @@ class RendezvousChannelKoval<E>(
                                 val done = _elimReceiverArray[i] as Done
                                 _elimReceiverArray[i] = null
                                 incElimReceiverArraySize(1)
-//                                _elimsSucc++
+                                _elimsSucc++
                                 return done.value
                             }
-                        }
+                        } else incElimReceiverArraySize(1)
                     }
+                    else -> incElimReceiverArraySize(1)
                 }
             }
             // Elimination was unsuccessful :(
@@ -395,6 +403,7 @@ class RendezvousChannelKoval<E>(
 
     // This method is based on `#sendOrReceiveSuspend`. Returns `null` if fails.
     private fun <T> sendOrReceiveNonSuspend(element: Any): T? {
+        var localCounterUpdate = 0
         try_again@ while (true) { // CAS loop
             // Read the tail and its enqueue index at first, then the head and its indexes.
             val tail = _tail
@@ -411,10 +420,12 @@ class RendezvousChannelKoval<E>(
                     if (adjustHead(head)) continue@try_again
                     // Queue is empty, try to do elimination
                     // and return `null` if it fails.
+                    if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                     return tryEliminate(head, headEnqIdx, element) as T
                 } else {
                     // Queue is empty, try to do elimination
                     // and return `null` if it fails.
+                    if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                     return tryEliminate(head, headEnqIdx, element) as T
                 }
             } else {
@@ -425,7 +436,7 @@ class RendezvousChannelKoval<E>(
                 if (firstElement == TAKEN_ELEMENT) {
                     // Try to move the deque index in the `head` node
                     deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
-                    incElimReceiverArraySize(1); incElimSenderArraySize(1)
+                    localCounterUpdate++
                     continue@try_again
                 }
                 val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
@@ -435,6 +446,7 @@ class RendezvousChannelKoval<E>(
                     while (true) {
                         if (tryResumeContinuation(head, headDeqIdx, element)) {
                             // The rendezvous is happened, congratulations!
+                            if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                             return (if (element == RECEIVER_ELEMENT) firstElement else Unit) as T
                         }
                         // Re-read the required pointers
@@ -443,12 +455,15 @@ class RendezvousChannelKoval<E>(
                             head = _head
                             headDeqIdx = head._deqIdx
                             if (headDeqIdx == segmentSize) {
-                                if (!adjustHead(head)) { incElimReceiverArraySize(1); incElimSenderArraySize(1); continue@try_again }
+                                if (!adjustHead(head)) { localCounterUpdate++; continue@try_again }
                                 continue@read_state
                             }
                             // Check that `(head.id, headDeqIdx) < (headIdLimit, headDeqIdxLimit)`
                             // and re-start the whole operation if needed
-                            if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) { incElimReceiverArraySize(1); incElimSenderArraySize(1); continue@try_again }
+                            if (head.id > headIdLimit || (head.id == headIdLimit && headDeqIdx >= headDeqIdxLimit)) {
+                                localCounterUpdate++
+                                continue@try_again
+                            }
                             // Re-read the first element
                             firstElement = readElement(head, headDeqIdx)
                             if (firstElement == TAKEN_ELEMENT) {
@@ -459,6 +474,7 @@ class RendezvousChannelKoval<E>(
                         }
                     }
                 } else {
+                    if (localCounterUpdate > 0) { incElimSenderArraySize(1); incElimReceiverArraySize(1) }
                     return null
                 }
             }
