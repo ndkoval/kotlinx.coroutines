@@ -190,8 +190,8 @@ class RendezvousChannelKoval<E>(
             // in the waiting queue, it can add the current continuation to the already
             // read tail index if it is not changed. In this case, it is guaranteed that
             // the waiting queue still has the same continuations or is empty.
-//            val tail = _tail
-//            val tailEnqIdx = tail._enqIdx
+            val tail = _tail
+            val tailEnqIdx = tail._enqIdx
             var head = _head
             var headDeqIdx = head._deqIdx
             // If `headDeqIdx` is equals to the segment size the head node is full.
@@ -205,30 +205,28 @@ class RendezvousChannelKoval<E>(
             }
             // It is guaranteed that `headDeqIdx < segmentSize`. If this cell is empty,
             // queue is empty too. Store the current continuation to the queue in this case.
-            val firstCont = head.getContinuationVolatile(headDeqIdx)
+            var firstCont = head.getContinuationVolatile(headDeqIdx)
             if (firstCont == null) return null
-            if (firstCont !is CancellableContinuation<*>) continue@try_again
             // Queue is not empty
-//            val isFirstContReceiver = (firstCont == TAKEN_RECEIVER_CONTINUATION) || (firstCont is CancellableContinuation<*> && firstCont.data == RECEIVER_ELEMENT)
-            val isFirstContReceiver = (firstCont.data == RECEIVER_ELEMENT)
+            val isFirstContReceiver = (firstCont == TAKEN_RECEIVER_CONTINUATION) || (firstCont is CancellableContinuation<*> && firstCont.data == RECEIVER_ELEMENT)
             val makeRendezvous = if (element == RECEIVER_ELEMENT) !isFirstContReceiver else isFirstContReceiver
-//            val headIdLimit = tail.id
-//            val headDeqIdxLimit = tailEnqIdx
+            val headIdLimit = tail.id
+            val headDeqIdxLimit = tailEnqIdx
             if (makeRendezvous) {
-//                while (true) {
-//                    if (firstCont == TAKEN_RECEIVER_CONTINUATION || firstCont == TAKEN_SENDER_CONTINUATION) {
-//                        deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
-//                    } else {
-//                        firstCont as CancellableContinuation<*>
+                while (true) {
+                    if (firstCont == TAKEN_RECEIVER_CONTINUATION || firstCont == TAKEN_SENDER_CONTINUATION) {
+                        deqIdxUpdater.compareAndSet(head, headDeqIdx, headDeqIdx + 1)
+                    } else {
+                        firstCont as CancellableContinuation<*>
                         if (tryResumeContinuation(head, headDeqIdx, firstCont, element)) {
                             // The rendezvous is happened, congratulations!
                             // Resume the current continuation
                             val result = (if (element == RECEIVER_ELEMENT) firstCont.data else Unit) as T
                             return result
                         } else continue@try_again
-//                    }
+                    }
                     // Re-read the required pointers
-                   /* read_state@ while (true) {
+                    read_state@ while (true) {
                         // Re-read head pointer and its deque index
                         head = _head
                         headDeqIdx = head._deqIdx
@@ -243,8 +241,8 @@ class RendezvousChannelKoval<E>(
                         // Re-read the first element
                         firstCont = head.getContinuationVolatile(headDeqIdx)
                         break@read_state
-                    }*/
-//                }
+                    }
+                }
             } else return null
         }
     }
