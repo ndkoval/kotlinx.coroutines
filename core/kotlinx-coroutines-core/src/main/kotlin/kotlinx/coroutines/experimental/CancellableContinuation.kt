@@ -62,6 +62,8 @@ import kotlin.coroutines.experimental.suspendCoroutine
  * ```
  */
 public actual interface CancellableContinuation<in T> : Continuation<T>, Job {
+    var data: Any?
+
     /**
      * Returns `true` when this continuation is active -- it has not completed or cancelled yet.
      */
@@ -218,6 +220,8 @@ internal class CancellableContinuationImpl<in T>(
     delegate: Continuation<T>,
     resumeMode: Int
 ) : AbstractContinuation<T>(delegate, resumeMode), CancellableContinuation<T>, Runnable {
+    override var data: Any? = null
+
     @Volatile // just in case -- we don't want an extra data race, even benign one
     private var _context: CoroutineContext? = null // created on first need
 
