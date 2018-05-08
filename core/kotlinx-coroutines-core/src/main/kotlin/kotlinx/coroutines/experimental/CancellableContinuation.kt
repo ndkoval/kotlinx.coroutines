@@ -20,6 +20,7 @@
 package kotlinx.coroutines.experimental
 
 import kotlinx.coroutines.experimental.internal.LockFreeLinkedListNode
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.experimental.Continuation
 import kotlin.coroutines.experimental.CoroutineContext
 import kotlin.coroutines.experimental.intrinsics.suspendCoroutineOrReturn
@@ -63,6 +64,7 @@ import kotlin.coroutines.experimental.suspendCoroutine
  */
 public actual interface CancellableContinuation<in T> : Continuation<T>, Job {
     var data: Any?
+    var status: AtomicLong
 
     /**
      * Returns `true` when this continuation is active -- it has not completed or cancelled yet.
@@ -221,6 +223,7 @@ internal class CancellableContinuationImpl<in T>(
     resumeMode: Int
 ) : AbstractContinuation<T>(delegate, resumeMode), CancellableContinuation<T>, Runnable {
     override var data: Any? = null
+    override var status = AtomicLong(0)
 
     @Volatile // just in case -- we don't want an extra data race, even benign one
     private var _context: CoroutineContext? = null // created on first need
