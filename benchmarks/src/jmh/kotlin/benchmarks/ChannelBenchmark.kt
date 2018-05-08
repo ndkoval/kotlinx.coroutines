@@ -80,7 +80,7 @@ internal enum class ChannelViewCreator(val create: () -> ChannelView) {
 //        suspend override fun send(element: Int) = c.send(element)
 //        suspend override fun receive(): Int = c.receive()
 //    }})
-    KOVAL_RENDEZVOUS_TWO_QUEUES({ object : ChannelView {
+    KOVAL_RENDEZVOUS_TWO_QUEUES_2({ object : ChannelView {
         val c = RendezvousChannelKoval<Int>()
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
