@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 
 
 
-internal class FAAQueue<E>(val segmentSize: Int = 128) {
+internal class FAAQueue<E>(val segmentSize: Int = 128, val spinThreshold: Int = 300) {
     internal class Node(segmentSize: Int) {
         // Indexes for deque ([_deqIdx]) and enqueue ([_enqIdx]) operations
         // on the waiting queue. On each operation the required one should be
@@ -39,6 +39,10 @@ internal class FAAQueue<E>(val segmentSize: Int = 128) {
 
         inline fun getAndSetContinuation(index: Int, newCont: Any?): Any? {
             return UNSAFE.getAndSetObject(_data, byteOffset(index), newCont)
+        }
+
+        inline fun getContinuation(index: Int): Any? {
+            return UNSAFE.getObjectVolatile(_data, byteOffset(index))
         }
 
         inline fun setContinuation(index: Int, cont: Any?): Any? {
@@ -89,8 +93,20 @@ internal class FAAQueue<E>(val segmentSize: Int = 128) {
                 headUpdater.compareAndSet(this, head, head._next)
                 continue
             }
-            val item = head.getAndSetContinuation(idx, TAKEN_CONTINUATION)
-            if (item != null && item != TAKEN_CONTINUATION) return item as E
+            var item = head.getContinuation(idx)
+            var attempt = 0
+            do {
+                if (item != null) break
+                item = head.getContinuation(idx)
+                attempt++
+            } while (attempt < spinThreshold)
+            if (item == TAKEN_CONTINUATION) continue
+            if (item == null) {
+                if (head.casContinuation(idx, null, TAKEN_CONTINUATION)) continue
+                item = head.getContinuation(idx)
+                if (item == TAKEN_CONTINUATION) continue
+            }
+            return item as E
         }
     }
 

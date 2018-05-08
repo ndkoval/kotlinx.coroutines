@@ -52,23 +52,15 @@ class RendezvousChannelTwoQueues<E>(segmentSize: Int = 32) : ChannelKoval<E> {
                     break@enqueue
                 }
             }
-            val checkStatus = checkCont(curCont) { receivers.isEmpty() }
-            when (checkStatus) {
-                1 -> {
-                    curCont.initCancellability()
-                    return@sc
-                }
-                2 -> {
-                    enqNode!!.setContinuation(enqIdx, TAKEN_CONTINUATION)
-                    if (offer(element)) {
-                        curCont.resume(Unit)
-                        return@sc
-                    }
-                }
-                3 -> {
+            if (!checkCont(curCont) { receivers.isEmpty() }) {
+                enqNode!!.setContinuation(enqIdx, TAKEN_CONTINUATION)
+                if (offer(element)) {
                     curCont.resume(Unit)
                     return@sc
                 }
+            } else {
+                curCont.initCancellability()
+                return@sc
             }
         }
     }
@@ -101,8 +93,7 @@ class RendezvousChannelTwoQueues<E>(segmentSize: Int = 32) : ChannelKoval<E> {
                     break@enqueue
                 }
             }
-
-            if (checkCont(curCont) { senders.isEmpty() } != 1) {
+            if (!checkCont(curCont) { senders.isEmpty() }) {
                 enqNode!!.setContinuation(enqIdx, TAKEN_CONTINUATION)
                 val res = poll()
                 if (res != null) {
@@ -122,29 +113,29 @@ class RendezvousChannelTwoQueues<E>(segmentSize: Int = 32) : ChannelKoval<E> {
         cont.status.set((epoch + 1) * 4)
     }
 
-    inline fun checkCont(cont: CancellableContinuation<*>, crossinline block: () -> Boolean): Int {
-        val curStatus = cont.status.get() // 0 -- undef, 1 -- good, 2 -- bad, 3 -- matched (senders only)
+    inline fun checkCont(cont: CancellableContinuation<*>, crossinline block: () -> Boolean): Boolean {
+        val curStatus = cont.status.get() // 0 -- undef, 1 -- good, 2 -- bad
         val epoch = curStatus / 4
         val status = curStatus % 4
         if (status == 0L) {
             val value = if (block()) 1L else 2L
             if (cont.status.compareAndSet(curStatus, epoch * 4 + value)) {
-                return value.toInt()
+                return if (value == 1L) true else false
             } else {
                 val updStatus = cont.status.get()
                 val updEpoch = updStatus  / 4
-                if (updEpoch != epoch) return 2
-                return (updStatus % 4).toInt()
+                if (updEpoch != epoch) return false
+                return if (updStatus % 4 == 1L) true else false
             }
         } else {
-            return status.toInt()
+            return if (status == 1L) true else false
         }
     }
 
     override fun offer(element: E): Boolean {
         while (true) {
             val r = receivers.dequeue() ?: return false
-            if (checkCont(r) { senders.isEmpty() } != 1) continue
+            if (!checkCont(r) { senders.isEmpty() } ) continue
             r as CancellableContinuation<E>
             val token = r.tryResume(element)
             if (token != null) {
@@ -157,34 +148,14 @@ class RendezvousChannelTwoQueues<E>(segmentSize: Int = 32) : ChannelKoval<E> {
     override fun poll(): E? {
         while (true) {
             val s = senders.dequeue() ?: return null
-            var data: Any? = null
-            var result = -1
-            val curStatus = s.status.get()
-            val epoch = curStatus / 4
-            val status = curStatus % 4
-            if (status == 0L) {
-                data = s.data
-                if (s.status.compareAndSet(curStatus, epoch * 4 + 3)) return data as E
-                val value = if (receivers.isEmpty()) 1L else 2L
-                if (s.status.compareAndSet(curStatus, epoch * 4 + value)) {
-                    result = value.toInt()
-                } else {
-                    val updStatus = s.status.get()
-                    val updEpoch = updStatus  / 4
-                    if (updEpoch != epoch) result = 2
-                    result = (updStatus % 4).toInt()
-                }
-            } else {
-                result = status.toInt()
-            }
-            if (result != 1) continue
+            if (!checkCont(s) { receivers.isEmpty() } ) continue
             s as CancellableContinuation<Unit>
             val token = s.tryResume(Unit)
             if (token != null) {
                 val res = s.data
                 s.data = null
                 s.completeResume(token)
-                return res as E
+                return res as E?
             }
         }
     }
