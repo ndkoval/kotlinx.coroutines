@@ -149,8 +149,7 @@ class RendezvousChannelKoval<E>(
                 // stores the continuation and the element after that. This way, it is not guaranteed that
                 // the first element is stored. The main idea is to spin on the value a bit and then change
                 // element value from `null` to `TAKEN_ELEMENT` and increment the deque index if it is not appeared.
-                // In this case the operation should start again. This simple  approach guarantees obstruction-freedom.
-                // TODO make it lock-free using descriptors
+                // In this case the operation should start again. This simple  approach guarantees lock-freedom.
                 var firstElement = readElement(head, headDeqIdx)
                 if (firstElement == TAKEN_ELEMENT) {
                     // Try to move the deque index in the `head` node
