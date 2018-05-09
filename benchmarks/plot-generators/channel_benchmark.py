@@ -33,9 +33,11 @@ contention_factors = all_values(data, contention_factor_key)
 threads = all_values(data, threads_key)
 channels = all_values(data, channel_key)
 
-channels.remove('ELIZAROV_RENDEZVOUS')
+
+#channels.remove('ELIZAROV_RENDEZVOUS')
 channels.remove('KOVAL_MS_RENDEZVOUS')
-channels.remove('KOVAL_STACK_RENDEZVOUS')
+channels.remove('KOVAL_MS_RENDEZVOUS_NEW') # based on "Scalable synch. queue" paprt
+# channels.remove('KOVAL_STACK_RENDEZVOUS')
 
 channels.remove('KOVAL_RENDEZVOUS_SPIN_1')
 channels.remove('KOVAL_RENDEZVOUS_SPIN_5')
@@ -77,7 +79,49 @@ channels.remove('KOVAL_RENDEZVOUS_SPIN_3000_NEW_2')
 channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_2_CONTENDED_HT') # same
 channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_2_CONTENDED_INDEXES') # bad
 
-# channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3') # Unsafe instead of AtomicReferenceArray, better
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3') # Unsafe instead of AtomicReferenceArray, better
+
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_1')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_2')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_4')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_8')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_16')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_24')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_32')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_48')
+# channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_64') # very good
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_96')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_128') # very good, but big
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_192')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_256')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_512')
+channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_1024')
+
+
+channels.remove('KOVAL_RENDEZVOUS_ELIM_5_8_10') # works good in big contention
+channels.remove('KOVAL_RENDEZVOUS_ELIM_5_8_50')
+channels.remove('KOVAL_RENDEZVOUS_ELIM_5_8_100')
+
+# elimination adaptation does does not work :(
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW')
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_SPIN_10')
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_SPIN_20')
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_SPIN_50')
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_SPIN_100')
+
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_2') # elimination does not work
+
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_3') # it seems like tries elimination always
+
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_4') # works good, but has bad results for low-contention cases
+
+channels.remove('KOVAL_RENDEZVOUS_ELIM_NEW_5') # decrement by greater constant, no elimination this way :(
+
+channels.remove('KOVAL_RENDEZVOUS_LOCK_FREE') # lock-free version with storing an element into the continuation, does not work
+                                                # version with storing the sender/receiver flag into enqIdx does not work too
+
+channels.remove('KOVAL_RENDEZVOUS_TWO_QUEUES') # does not scales
+channels.remove('KOVAL_RENDEZVOUS_TWO_QUEUES_2') # does not scales
 
 threads = [float(i) for i in threads]
 
@@ -108,15 +152,16 @@ def draw():
             for row in data:
                 if (row[contention_factor_key] == cont_fact) & (row[channel_key] == c):
                     scores.append(float(row[score_key]))
-            ax.plot(threads, scores, marker = marker.next(), label=c.replace('_RENDEZVOUS', '') if iPlot == 0 else "")
-            # ax.plot(threads, scores, label=c.replace('_RENDEZVOUS', '').replace('ELIZAROV', 'CURRENT').replace('KOVAL_SPIN_700_NEW', 'NEW') if iPlot == 0 else "")
+            # ax.plot(threads, scores, marker = marker.next(), label=c.replace('_RENDEZVOUS', '') if iPlot == 0 else "")
+            ax.plot(threads, scores, label=c.replace('_RENDEZVOUS', '').replace('ELIZAROV', 'CURRENT').replace('KOVAL_SPIN_300_NEW_3_SEGM_64', 'SEGMENTS').replace('KOVAL_MS_NEW', 'PAPER_MS') if iPlot == 0 else "")
+        ax.set_ylim(ymin=0)
         ax.set_title('Channels = ' + str(cont_fact))
         if xPlot == 0: ax.set(ylabel='ms/batch')
         if yPlot == yPlotMax - 1: ax.set(xlabel='threads')
     f.legend(loc=9, ncol=4, prop={'size': 6})
     # f.suptitle('Total time of a bulk of send/receive operations (less is better)')
 
-    plt.show()
+    # plt.show()
     f.subplots_adjust(hspace=.6, wspace=.4)
     output_filename = os.path.splitext(filename)[0] + '.pdf'
     f.savefig(output_filename, bbox_inches='tight', bbox_to_anchor=(0.5, -1))
