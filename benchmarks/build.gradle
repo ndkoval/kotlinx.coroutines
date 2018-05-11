@@ -21,7 +21,7 @@ jmh {
     forceGC = true
     failOnError = true
 //    jvmArgs = ['-XX:+UseRTMLocking']
-    include = ['.*ChannelBenchmark.*']
+    include = ['benchmarks\\.channel\\..*']
 //    include = ['.*SemaphoreBenchmark.*', '.*Mutex.*Benchmark.*']
 //    exclude = ['.*Guice.*', '.*PingPong.*']
 }
