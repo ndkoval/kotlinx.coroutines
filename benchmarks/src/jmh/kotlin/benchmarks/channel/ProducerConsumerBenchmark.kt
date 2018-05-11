@@ -44,27 +44,6 @@ open class ProducerConsumerBenchmark {
         channels = List(contentionFactor, { channelCreator.create() })
     }
 
-    @Benchmark
-    fun mpmcBadse(producers: Int, consumers: Int, blackhole: Blackhole) = runBlocking {
-        if (coroutines % (contentionFactor * 2) != 0) return@runBlocking
-        if (SEND_OPERATIONS % (coroutines * 2) != 0) return@runBlocking
-
-        val jobs = List(coroutines) { index ->
-            val channel = channels[index % contentionFactor]
-            val sender = (index / contentionFactor) % 2 == 0
-            launch(dispatcher) {
-                repeat(SEND_OPERATIONS / (coroutines * 2)) {
-                    if (sender) {
-                        channel.send(index)
-                    } else {
-                        blackhole.consume(channel.receive())
-                    }
-                }
-            }
-        }
-        jobs.forEach { it.join() }
-    }
-
     fun mpmcBase(producers: Int, consumers: Int, blackhole: Blackhole) = runBlocking {
         check(SEND_OPERATIONS % (producers * contentionFactor) == 0)
         check(SEND_OPERATIONS % (consumers * contentionFactor) == 0)
@@ -88,11 +67,11 @@ open class ProducerConsumerBenchmark {
     }
 
     @Benchmark
-    fun mpmc(blackhole: Blackhole) = mpmcBadse(coroutines / 2, coroutines / 2, blackhole)
+    fun mpmc(blackhole: Blackhole) = mpmcBase(coroutines / 2, coroutines / 2, blackhole)
 
     @Benchmark
-    fun spmc(blackhole: Blackhole) = mpmcBadse(1, coroutines / 2, blackhole)
+    fun spmc(blackhole: Blackhole) = mpmcBase(1, coroutines / 2, blackhole)
 
     @Benchmark
-    fun mpsc(blackhole: Blackhole) = mpmcBadse(coroutines / 2, 1, blackhole)
+    fun mpsc(blackhole: Blackhole) = mpmcBase(coroutines / 2, 1, blackhole)
 }
