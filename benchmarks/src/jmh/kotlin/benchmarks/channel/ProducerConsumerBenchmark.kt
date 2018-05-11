@@ -22,7 +22,8 @@ import java.util.concurrent.TimeUnit
 open class ProducerConsumerBenchmark {
     private val SEND_OPERATIONS = 500_000
 
-    @Param(value = IST_SERVER_THREADS)
+    //    @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
+    @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "72", "98", "144", "160", "200", "250") // IST server
     private var threads: Int = 0
 
 //    @Param("2", "10", "100", "1000", "10000")
