@@ -18,7 +18,7 @@ open class CancellationBenchmark {
     @Param(value = IST_SERVER_THREADS)
     private var threads: Int = 0
 
-    @Param
+    @Param("true", "false")
     private var shuffled = false
 
 //    @Param("CURRENT", "SEGMENTS")
