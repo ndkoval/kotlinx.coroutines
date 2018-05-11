@@ -51,7 +51,9 @@ open class ProducerConsumerBenchmark {
 
         val jobs = List(producers + consumers) { index ->
             val channel = channels[index % contentionFactor]
-            val isSender = (index % 2 == 0 && (index / 2 + 1) <= producers) || (index / 2 + 1) > consumers
+            val thisChannelIndex = index / contentionFactor
+            val isSender = (thisChannelIndex % 2 == 0 && (thisChannelIndex / 2 + 1) <= producers)
+                    || (thisChannelIndex / 2 + 1) > consumers
             launch(dispatcher) {
                 if (isSender) {
                     repeat(SEND_OPERATIONS / producers) {
