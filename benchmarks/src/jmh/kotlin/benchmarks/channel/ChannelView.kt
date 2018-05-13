@@ -25,5 +25,15 @@ internal enum class ChannelViewCreator(val create: () -> ChannelView) {
         val c = kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKovalStack<Int>()
         suspend override fun send(element: Int) = c.send(element)
         suspend override fun receive(): Int = c.receive()
-    }});
+    }})
+}
+
+
+internal fun gcd(a: Int, b: Int): Int {
+    if (b == 0) return a
+    return gcd(b, a % b)
+}
+
+internal fun lcm(a: Int, b: Int): Int {
+    return a / gcd(a, b) * b
 }

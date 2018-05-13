@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 open class CancellationBenchmark {
-    private val TOTAL_WAITING_COROUTINES = 1_000_000
+    private val TOTAL_WAITING_COROUTINES = 500_000
 
 //    @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
     @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "72", "98", "144", "160", "200", "250") // IST server

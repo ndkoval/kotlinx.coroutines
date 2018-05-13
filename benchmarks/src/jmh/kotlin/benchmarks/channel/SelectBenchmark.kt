@@ -10,6 +10,7 @@ import org.openjdk.jmh.annotations.*
 import org.openjdk.jmh.infra.Blackhole
 import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 @Warmup(iterations = 5, time = 1, timeUnit = TimeUnit.SECONDS)
 @Measurement(iterations = 10, time = 1, timeUnit = TimeUnit.SECONDS)
@@ -18,15 +19,14 @@ import java.util.concurrent.TimeUnit
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 open class SelectBenchmark {
-    private val SEND_OPERATIONS = 500_000
+    private val SEND_OPERATIONS_APPROXIMATE = 500_000
 
     //    @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
     @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "72", "98", "144", "160", "200", "250") // IST server
     private var threads: Int = 0
 
-//    @Param("2", "10", "100", "1000", "10000")
-    @Param("10000")
-    private var coroutines: Int = 0
+    @Param("1", "10", "100", "1000")
+    private var coroutinesMultiplier: Int = 0
 
     @Param("1", "2", "5", "20")
     private var channelsToSelect: Int = 0
@@ -43,14 +43,15 @@ open class SelectBenchmark {
     }
 
     fun mpmcCurrentBase(producers: Int, consumers: Int, blackhole: Blackhole) = runBlocking {
-        check(SEND_OPERATIONS % producers == 0)
-        check(SEND_OPERATIONS % consumers == 0)
+        val sendOperationsFactor = lcm(producers, consumers) * coroutinesMultiplier
+        val sendOperations = SEND_OPERATIONS_APPROXIMATE / sendOperationsFactor * sendOperationsFactor
 
-        val jobs = List(producers + consumers) { index ->
-            val sender = (index % 2 == 0 && (index / 2 + 1) <= producers) || (index / 2 + 1) > consumers
+        val jobs = List((producers + consumers) * coroutinesMultiplier) { index ->
+            val sender = (index % 2 == 0 && (index / 2 + 1) <= (producers * coroutinesMultiplier))
+                    || (index / 2 + 1) > (consumers * coroutinesMultiplier)
             launch(dispatcher) {
                 if (sender) {
-                    repeat(SEND_OPERATIONS / producers) {
+                    repeat(sendOperations / (producers * coroutinesMultiplier)) {
                         kotlinx.coroutines.experimental.selects.select {
                             channelsListCurrent.forEach {
                                 ch -> ch.onSend(index) { /* Do nothing */}
@@ -58,7 +59,7 @@ open class SelectBenchmark {
                         }
                     }
                 } else {
-                    repeat(SEND_OPERATIONS / consumers) {
+                    repeat(sendOperations / (consumers * coroutinesMultiplier)) {
                         kotlinx.coroutines.experimental.selects.select<Unit> {
                             channelsListCurrent.forEach {
                                 ch -> ch.onReceive { blackhole.consume(it) }
@@ -72,25 +73,25 @@ open class SelectBenchmark {
     }
 
     @Benchmark
-    fun mpmcCurrent(blackhole: Blackhole) = mpmcCurrentBase(coroutines / 2, coroutines / 2, blackhole)
+    fun mpmcCurrent(blackhole: Blackhole) = mpmcCurrentBase(max(1, threads / 2), max(1, threads / 2), blackhole)
 
     @Benchmark
-    fun spmcCurrent(blackhole: Blackhole) = mpmcCurrentBase(1, coroutines, blackhole)
+    fun spmcCurrent(blackhole: Blackhole) = mpmcCurrentBase(1, max(1, threads - 1), blackhole)
 
     @Benchmark
-    fun mpscCurrent(blackhole: Blackhole) = mpmcCurrentBase(coroutines, 1, blackhole)
+    fun mpscCurrent(blackhole: Blackhole) = mpmcCurrentBase(max(1, threads - 1), 1, blackhole)
 
 
 
     fun mpmcSegmentsBase(producers: Int, consumers: Int, blackhole: Blackhole) = runBlocking {
-        check(SEND_OPERATIONS % producers == 0)
-        check(SEND_OPERATIONS % consumers == 0)
+        check(SEND_OPERATIONS_APPROXIMATE % producers == 0)
+        check(SEND_OPERATIONS_APPROXIMATE % consumers == 0)
 
         val jobs = List(producers + consumers) { index ->
             val isSender = (index % 2 == 0 && (index / 2 + 1) <= producers) || (index / 2 + 1) > consumers
             launch(dispatcher) {
                 if (isSender) {
-                    repeat(SEND_OPERATIONS / producers) {
+                    repeat(SEND_OPERATIONS_APPROXIMATE / producers) {
                         kotlinx.coroutines.experimental.channels.koval.select {
                             channelsListSegments.forEach {
                                 ch -> ch.onSend(index) { /* Do nothing */}
@@ -98,7 +99,7 @@ open class SelectBenchmark {
                         }
                     }
                 } else {
-                    repeat(SEND_OPERATIONS / consumers) {
+                    repeat(SEND_OPERATIONS_APPROXIMATE / consumers) {
                         kotlinx.coroutines.experimental.channels.koval.select {
                             channelsListSegments.forEach {
                                 ch -> ch.onReceive { blackhole.consume(it) }
@@ -111,12 +112,12 @@ open class SelectBenchmark {
         jobs.forEach { it.join() }
     }
 
-    @Benchmark
-    fun mpmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(coroutines / 2, coroutines / 2, blackhole)
+//    @Benchmark
+//    fun mpmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(coroutines / 2, coroutines / 2, blackhole)
 
-    @Benchmark
-    fun spmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(1, coroutines, blackhole)
+//    @Benchmark
+//    fun spmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(1, coroutines, blackhole)
 
-    @Benchmark
-    fun mpscSegments(blackhole: Blackhole) = mpmcSegmentsBase(coroutines, 1, blackhole)
+//    @Benchmark
+//    fun mpscSegments(blackhole: Blackhole) = mpmcSegmentsBase(coroutines, 1, blackhole)
 }

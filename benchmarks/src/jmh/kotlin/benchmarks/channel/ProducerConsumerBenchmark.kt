@@ -2,16 +2,13 @@ package benchmarks.channel
 
 import kotlinx.coroutines.experimental.CoroutineDispatcher
 import kotlinx.coroutines.experimental.asCoroutineDispatcher
-import kotlinx.coroutines.experimental.channels.RendezvousChannel
-import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKoval
-import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKovalMSQueue
-import kotlinx.coroutines.experimental.channels.koval.RendezvousChannelKovalStack
 import kotlinx.coroutines.experimental.launch
 import kotlinx.coroutines.experimental.runBlocking
 import org.openjdk.jmh.annotations.*
 import org.openjdk.jmh.infra.Blackhole
 import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 @Warmup(iterations = 5, time = 1, timeUnit = TimeUnit.SECONDS)
 @Measurement(iterations = 10, time = 1, timeUnit = TimeUnit.SECONDS)
@@ -20,15 +17,14 @@ import java.util.concurrent.TimeUnit
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 open class ProducerConsumerBenchmark {
-    private val SEND_OPERATIONS = 500_000
+    private val SEND_OPERATIONS_APPROXIMATE = 500_000
 
     //    @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
     @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "72", "98", "144", "160", "200", "250") // IST server
     private var threads: Int = 0
 
-//    @Param("2", "10", "100", "1000", "10000")
-    @Param("10000")
-    private var coroutines: Int = 0
+    @Param("1", "10", "100", "1000")
+    private var coroutinesMultiplier: Int = 0
 
     @Param("1", "2", "5", "20")
     private var contentionFactor: Int = 0
@@ -46,22 +42,20 @@ open class ProducerConsumerBenchmark {
     }
 
     fun mpmcBase(producers: Int, consumers: Int, blackhole: Blackhole) = runBlocking {
-        check(SEND_OPERATIONS % (producers * contentionFactor) == 0)
-        check(SEND_OPERATIONS % (consumers * contentionFactor) == 0)
+        val sendOperationsFactor = lcm(producers, consumers) * contentionFactor * coroutinesMultiplier
+        val sendOperations = SEND_OPERATIONS_APPROXIMATE / sendOperationsFactor * sendOperationsFactor
 
-        val jobs = List(producers + consumers) { index ->
-            val channel = channels[index % contentionFactor]
-            val thisChannelIndex = index / contentionFactor
-            val isSender = (thisChannelIndex % 2 == 0 && (thisChannelIndex / 2 + 1) <= producers)
-                    || (thisChannelIndex / 2 + 1) > consumers
+        val jobs = List((producers + consumers) * coroutinesMultiplier) { index ->
+            val isSender = (index % 2 == 0 && (index / 2) < (producers * coroutinesMultiplier))
+                    || (index / 2) >= (consumers * coroutinesMultiplier)
             launch(dispatcher) {
                 if (isSender) {
-                    repeat(SEND_OPERATIONS / producers) {
-                        channel.send(index)
+                    repeat(sendOperations / (producers * coroutinesMultiplier)) {
+                        channels[it % contentionFactor].send(index)
                     }
                 } else {
-                    repeat(SEND_OPERATIONS / consumers) {
-                        blackhole.consume(channel.receive())
+                    repeat(sendOperations / (consumers * coroutinesMultiplier)) {
+                        blackhole.consume(channels[it % contentionFactor].receive())
                     }
                 }
             }
@@ -70,11 +64,11 @@ open class ProducerConsumerBenchmark {
     }
 
     @Benchmark
-    fun mpmc(blackhole: Blackhole) = mpmcBase(coroutines / 2, coroutines / 2, blackhole)
+    fun mpmc(blackhole: Blackhole) = mpmcBase(max(1, threads / 2), max(1, threads / 2), blackhole)
 
     @Benchmark
-    fun spmc(blackhole: Blackhole) = mpmcBase(1, coroutines / 2, blackhole)
+    fun spmc(blackhole: Blackhole) = mpmcBase(1, max(1, threads - 1), blackhole)
 
     @Benchmark
-    fun mpsc(blackhole: Blackhole) = mpmcBase(coroutines / 2, 1, blackhole)
+    fun mpsc(blackhole: Blackhole) = mpmcBase(max(1, threads - 1), 1, blackhole)
 }
