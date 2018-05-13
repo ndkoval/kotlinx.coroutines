@@ -37,7 +37,7 @@ channels = all_values(data, channel_key)
 #channels.remove('ELIZAROV_RENDEZVOUS')
 channels.remove('KOVAL_MS_RENDEZVOUS')
 channels.remove('KOVAL_MS_RENDEZVOUS_NEW') # based on "Scalable synch. queue" paprt
-# channels.remove('KOVAL_STACK_RENDEZVOUS')
+channels.remove('KOVAL_STACK_RENDEZVOUS')
 
 channels.remove('KOVAL_RENDEZVOUS_SPIN_1')
 channels.remove('KOVAL_RENDEZVOUS_SPIN_5')
@@ -98,7 +98,7 @@ channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_512')
 channels.remove('KOVAL_RENDEZVOUS_SPIN_300_NEW_3_SEGM_1024')
 
 
-channels.remove('KOVAL_RENDEZVOUS_ELIM_5_8_10') # works good in big contention
+# channels.remove('KOVAL_RENDEZVOUS_ELIM_5_8_10') # works good in big contention
 channels.remove('KOVAL_RENDEZVOUS_ELIM_5_8_50')
 channels.remove('KOVAL_RENDEZVOUS_ELIM_5_8_100')
 
@@ -153,7 +153,7 @@ def draw():
                 if (row[contention_factor_key] == cont_fact) & (row[channel_key] == c):
                     scores.append(float(row[score_key]))
             # ax.plot(threads, scores, marker = marker.next(), label=c.replace('_RENDEZVOUS', '') if iPlot == 0 else "")
-            ax.plot(threads, scores, label=c.replace('_RENDEZVOUS', '').replace('ELIZAROV', 'CURRENT').replace('KOVAL_SPIN_300_NEW_3_SEGM_64', 'SEGMENTS').replace('KOVAL_MS_NEW', 'PAPER_MS') if iPlot == 0 else "")
+            ax.plot(threads, scores, label=c.replace('_RENDEZVOUS', '').replace('ELIZAROV', 'CURRENT').replace('KOVAL_SPIN_300_NEW_3_SEGM_64', 'SEGMENTS').replace('KOVAL_MS_NEW', 'PAPER_MS').replace('KOVAL_ELIM_5_8_10', 'SEGMENTS_WITH_ELIMINATION') if iPlot == 0 else "")
         ax.set_ylim(ymin=0)
         ax.set_title('Channels = ' + str(cont_fact))
         if xPlot == 0: ax.set(ylabel='ms/batch')
