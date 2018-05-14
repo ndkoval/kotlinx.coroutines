@@ -34,7 +34,7 @@ fun main(args: Array<String>) = runBlocking {
         repeat(10) { work(chCreator()) }
     }
 
-    workHard { RendezvousChannelKovalMSQueue() }
-    workHard { RendezvousChannelKovalStack() }
     workHard { RendezvousChannelKoval() }
+//    workHard { RendezvousChannelKovalMSQueue() }
+//    workHard { RendezvousChannelKovalStack() }
 }
