@@ -20,6 +20,7 @@ jmhJar.archiveName = 'benchmarks.jar'
 jmh {
     forceGC = true
     failOnError = true
+    resultFormat = 'CSV'
 //    jvmArgs = ['-XX:+UseRTMLocking']
     include = ['benchmarks\\.channel\\..*']
 //    include = ['.*SemaphoreBenchmark.*', '.*Mutex.*Benchmark.*']

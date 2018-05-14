@@ -19,8 +19,8 @@ import kotlin.math.max
 open class ProducerConsumerBenchmark {
     private val SEND_OPERATIONS_APPROXIMATE = 500_000
 
-    //    @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
-    @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "72", "98", "144", "160", "200", "250") // IST server
+    // @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
+    @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "60", "72", "98", "144", "160", "200", "250") // IST server
     private var threads: Int = 0
 
     @Param("1", "10", "100", "1000")
@@ -66,9 +66,9 @@ open class ProducerConsumerBenchmark {
     @Benchmark
     fun mpmc(blackhole: Blackhole) = mpmcBase(max(1, threads / 2), max(1, threads / 2), blackhole)
 
-    @Benchmark
-    fun spmc(blackhole: Blackhole) = mpmcBase(1, max(1, threads - 1), blackhole)
+//    @Benchmark
+//    fun spmc(blackhole: Blackhole) = mpmcBase(1, max(1, threads - 1), blackhole)
 
-    @Benchmark
-    fun mpsc(blackhole: Blackhole) = mpmcBase(max(1, threads - 1), 1, blackhole)
+//    @Benchmark
+//    fun mpsc(blackhole: Blackhole) = mpmcBase(max(1, threads - 1), 1, blackhole)
 }

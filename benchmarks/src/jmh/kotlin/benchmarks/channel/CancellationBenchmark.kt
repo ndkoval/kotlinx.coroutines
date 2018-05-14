@@ -15,14 +15,14 @@ import java.util.concurrent.TimeUnit
 open class CancellationBenchmark {
     private val TOTAL_WAITING_COROUTINES = 500_000
 
-//    @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
-    @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "72", "98", "144", "160", "200", "250") // IST server
+    // @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
+    @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "60", "72", "98", "144", "160", "200", "250") // IST server
     private var threads: Int = 0
 
     @Param("true", "false")
     private var shuffled = false
 
-//    @Param("CURRENT", "SEGMENTS")
+    // @Param("CURRENT", "SEGMENTS")
     @Param("CURRENT")
     private lateinit var channelCreator: ChannelViewCreator
 

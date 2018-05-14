@@ -21,8 +21,8 @@ import kotlin.math.max
 open class SelectBenchmark {
     private val SEND_OPERATIONS_APPROXIMATE = 500_000
 
-    //    @Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
-    @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "72", "98", "144", "160", "200", "250") // IST server
+    // Param("1", "2", "4", "8", "12", "16", "20", "30", "40", "60", "80") // dxLab server
+    @Param("1", "2", "4", "8", "12", "18", "24", "36", "48", "60", "72", "98", "144", "160", "200", "250") // IST server
     private var threads: Int = 0
 
     @Param("1", "10", "100", "1000")
@@ -43,7 +43,7 @@ open class SelectBenchmark {
     }
 
     fun mpmcCurrentBase(producers: Int, consumers: Int, blackhole: Blackhole) = runBlocking {
-        val sendOperationsFactor = lcm(producers, consumers) * coroutinesMultiplier
+        val sendOperationsFactor = lcm(producers, consumers) * coroutinesMultiplier // 23 1 10
         val sendOperations = SEND_OPERATIONS_APPROXIMATE / sendOperationsFactor * sendOperationsFactor
 
         val jobs = List((producers + consumers) * coroutinesMultiplier) { index ->
@@ -75,23 +75,25 @@ open class SelectBenchmark {
     @Benchmark
     fun mpmcCurrent(blackhole: Blackhole) = mpmcCurrentBase(max(1, threads / 2), max(1, threads / 2), blackhole)
 
-    @Benchmark
-    fun spmcCurrent(blackhole: Blackhole) = mpmcCurrentBase(1, max(1, threads - 1), blackhole)
+//    @Benchmark
+//    fun spmcCurrent(blackhole: Blackhole) = mpmcCurrentBase(1, max(1, threads - 1), blackhole)
 
-    @Benchmark
-    fun mpscCurrent(blackhole: Blackhole) = mpmcCurrentBase(max(1, threads - 1), 1, blackhole)
+//    @Benchmark
+//    fun mpscCurrent(blackhole: Blackhole) = mpmcCurrentBase(max(1, threads - 1), 1, blackhole)
 
 
+    /* TODO: uncomment when select is implemented for segment-based channel
 
     fun mpmcSegmentsBase(producers: Int, consumers: Int, blackhole: Blackhole) = runBlocking {
-        check(SEND_OPERATIONS_APPROXIMATE % producers == 0)
-        check(SEND_OPERATIONS_APPROXIMATE % consumers == 0)
+        val sendOperationsFactor = lcm(producers, consumers) * coroutinesMultiplier // 23 1 10
+        val sendOperations = SEND_OPERATIONS_APPROXIMATE / sendOperationsFactor * sendOperationsFactor
 
-        val jobs = List(producers + consumers) { index ->
-            val isSender = (index % 2 == 0 && (index / 2 + 1) <= producers) || (index / 2 + 1) > consumers
+        val jobs = List((producers + consumers) * coroutinesMultiplier) { index ->
+            val sender = (index % 2 == 0 && (index / 2 + 1) <= (producers * coroutinesMultiplier))
+                    || (index / 2 + 1) > (consumers * coroutinesMultiplier)
             launch(dispatcher) {
-                if (isSender) {
-                    repeat(SEND_OPERATIONS_APPROXIMATE / producers) {
+                if (sender) {
+                    repeat(sendOperations / (producers * coroutinesMultiplier)) {
                         kotlinx.coroutines.experimental.channels.koval.select {
                             channelsListSegments.forEach {
                                 ch -> ch.onSend(index) { /* Do nothing */}
@@ -99,7 +101,7 @@ open class SelectBenchmark {
                         }
                     }
                 } else {
-                    repeat(SEND_OPERATIONS_APPROXIMATE / consumers) {
+                    repeat(sendOperations / (consumers * coroutinesMultiplier)) {
                         kotlinx.coroutines.experimental.channels.koval.select {
                             channelsListSegments.forEach {
                                 ch -> ch.onReceive { blackhole.consume(it) }
@@ -112,12 +114,14 @@ open class SelectBenchmark {
         jobs.forEach { it.join() }
     }
 
-//    @Benchmark
-//    fun mpmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(coroutines / 2, coroutines / 2, blackhole)
+    @Benchmark
+    fun mpmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(max(1, threads / 2), max(1, threads / 2), blackhole)
+
+    */
 
 //    @Benchmark
-//    fun spmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(1, coroutines, blackhole)
+//    fun spmcSegments(blackhole: Blackhole) = mpmcSegmentsBase(1, max(1, threads - 1), blackhole)
 
 //    @Benchmark
-//    fun mpscSegments(blackhole: Blackhole) = mpmcSegmentsBase(coroutines, 1, blackhole)
+//    fun mpscSegments(blackhole: Blackhole) = mpmcSegmentsBase(max(1, threads - 1), 1, blackhole)
 }
