@@ -2,8 +2,6 @@ package kotlinx.coroutines.experimental.channels.koval
 
 import kotlinx.coroutines.experimental.CancellableContinuation
 import kotlinx.coroutines.experimental.internal.Symbol
-import kotlinx.coroutines.experimental.selects.SelectClause1
-import kotlinx.coroutines.experimental.selects.SelectClause2
 import kotlinx.coroutines.experimental.suspendAtomicCancellableCoroutine
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
 

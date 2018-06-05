@@ -8,13 +8,21 @@
 5. Broadcast/conflated
    + This is more about implememtation, out of the research scope
 
+# Publications plan
+
+1. Lock-free rendezvous channel (+ select, closing, cancellation)
+2. Zoo of synchronization primitives for CSP
+   (buffered channels, broadcast channels, conflated channels, semaphore, mutex, pool)
+3. Scalable relaxed channels (no ordering, almost fifo, local linearizable, ...)
+4. Efficient embedded cancellation for continuations in programming via sequential processes
+
 # Rendezvous channel
 Channel is a simple abstraction to transfer a stream of values between coroutines. Two basic operations form a channel: `send(val: T)` and `receive(): T`. The standard channel is conceptually very similar to `BlockingQueue` with one element. One key difference is that instead of a blocking put operation it has a suspending send, and instead of a blocking take operation it has a suspending receive. 
 
 Here is a basic channel interface:
 
 ```java
-interface ChannelKoval<E> {
+interface Channel<E> {
     suspend fun send(element: E)
     fun offer(element: E): Boolean
 
@@ -70,6 +78,49 @@ private class Node {
 
 The main problem is to guarantee lock-freedom with such structure. In this document blocking version (with spin waits) is presented at first, then the algorithm is extended to obstruction-free and to lock-free.
 
-The blocking algorithm is pretty simple. Bla-bla-bla.
+The blocking algorithm is pretty simple and is presented in the code block below.
+
+```java
+// element is `RECEIVER_ELEMENT` for `receive()` method
+private suspend fun sendOrReceiveSuspend(element: Any, curCont: Continuation) {
+    try_again@ while (true) { // CAS loop
+        // Read the tail and its enqueue index at first, then the head and its indexes.
+        var tail = _tail
+        var tailEnqIdx = tail._enqIdx
+        var head = _head
+        var headDeqIdx = head._deqIdx
+        var headEnqIdx = head._enqIdx
+        // If `headDeqIdx == headEnqIdx`, either the waiting queue is empty or the `head` node is full
+        if (headDeqIdx == headEnqIdx) {
+            if (headDeqIdx == segmentSize) {
+                // The `head` node is full, ry to move head pointer forward
+                if (adjustHead(head)) continue@try_again
+                // Queue is empty, try to add a new node with the current coroutine
+                if (addNewNode(head, curCont, element)) return suspend(curCont)
+            } else {
+                // The `head` node is not full but empty, 
+                // try to store the current continuation
+                if (storeContinuation(head, headEnqIdx, curCont, element)) return suspend(curCont)
+            }
+        } else {
+            var firstElement = readElementSpin(head, headDeqIdx) // spin until element is non-null
+            val makeRendezvous = if (element == RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
+            if (makeRendezvous) {
+                if (tryResumeContinuation(head, headDeqIdx, element)) {
+                    return (if (element == RECEIVER_ELEMENT) firstElement else Unit) as T
+                }
+            } else {
+                // Try to add a new node with the current continuation and element
+                // if the tail is full, otherwise try to store it at the `tailEnqIdx` index.
+                if (tailEnqIdx == segmentSize) {
+                    if (addNewNode(tail, curCont, element)) suspend(curCont)
+                } else {
+                    if (storeContinuation(tail, tailEnqIdx, curCont, element)) return suspend(curCont)
+                }
+            }
+        }
+    }
+}
+```
 
 

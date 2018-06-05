@@ -1,8 +1,5 @@
 package kotlinx.coroutines.experimental.channels.koval
 
-import kotlinx.coroutines.experimental.selects.SelectClause1
-import kotlinx.coroutines.experimental.selects.SelectClause2
-
 interface ChannelKoval<E> {
     suspend fun send(element: E)
     val onSend: SelectClause2<E, ChannelKoval<E>>

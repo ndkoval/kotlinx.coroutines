@@ -2,8 +2,6 @@ package kotlinx.coroutines.experimental.channels.koval
 
 import kotlinx.coroutines.experimental.CancellableContinuation
 import kotlinx.coroutines.experimental.channels.koval.FAAQueue.Companion.TAKEN_CONTINUATION
-import kotlinx.coroutines.experimental.selects.SelectClause1
-import kotlinx.coroutines.experimental.selects.SelectClause2
 import kotlinx.coroutines.experimental.suspendAtomicCancellableCoroutine
 
 class RendezvousChannelTwoQueues<E>(segmentSize: Int = 32) : ChannelKoval<E> {
